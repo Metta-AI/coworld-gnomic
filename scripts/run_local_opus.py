@@ -31,7 +31,7 @@ def bedrock_env(profile: str, region: str) -> dict[str, str]:
         "AWS_SECRET_ACCESS_KEY": exported["SecretAccessKey"],
         "AWS_REGION": region,
         "AWS_DEFAULT_REGION": region,
-        "BEDROCK_MODEL": "us.anthropic.claude-opus-4-8",
+        "BEDROCK_MODEL": "us.anthropic.claude-opus-4-7",
         "USE_BEDROCK": "true",
     }
     if exported.get("SessionToken"):

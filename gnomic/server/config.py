@@ -27,7 +27,7 @@ class GameConfig(BaseModel):
     vote_window_s: float = Field(default=600.0, ge=0.05, le=600)
     judge_window_s: float = Field(default=600.0, ge=1, le=600)
     judge_mode: Literal["bedrock", "deterministic"] = "bedrock"
-    judge_model: str = "us.anthropic.claude-opus-4-8"
+    judge_model: str = "us.anthropic.claude-opus-4-7"
     seed: int | None = None
     player_connect_timeout_seconds: float = Field(default=180.0, ge=0, le=600)
     episode_timeout_seconds: float = Field(default=5_400.0, ge=60, le=7_200)

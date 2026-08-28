@@ -7,7 +7,7 @@ for the Softmax Universe. It is a full reskin of the
 garden-dinner game. Three gnome elders — Ivan of House One, Anton of House Two,
 and Yura of House Three — act inside a game while rewriting its Gnome Law: each
 active gnome states a natural-language move, proposes a change to the Law,
-debates, votes, and receives binding rulings from a separate Claude Opus 4.8
+debates, votes, and receives binding rulings from a separate Claude Opus 4.7
 Elder. An invalid move gets one repair attempt. Gnome Law can change actions,
 voting, turn order, scoring, victory, and arbitrary public JSON state; a small
 host shell keeps the protocol safe and ends the episode after at most 45 turns.

@@ -1,6 +1,6 @@
 [
   {
-    "name": "gnomic-ivan-opus-4-8",
+    "name": "gnomic-ivan-opus-4-7",
     "run": "python -m gnomic.players.llm",
     "env": {
       "GNOMIC_PERSONA": "ivan",
@@ -8,7 +8,8 @@
     }
   },
   {
-    "name": "gnomic-anton-opus-4-8",
+    "name": "gnomic-anton",
+    "player": "ply_bac48eb1-662e-44f8-973d-f3e016dccf5d",
     "run": "python -m gnomic.players.llm",
     "env": {
       "GNOMIC_PERSONA": "anton",
@@ -16,7 +17,8 @@
     }
   },
   {
-    "name": "gnomic-yura-opus-4-8",
+    "name": "gnomic-yura",
+    "player": "ply_80531ac1-7cb6-45ce-99b4-973fdccf2c91",
     "run": "python -m gnomic.players.llm",
     "env": {
       "GNOMIC_PERSONA": "yura",

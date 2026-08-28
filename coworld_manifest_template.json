@@ -13,7 +13,7 @@
   ],
   "game": {
     "name": "gnomic",
-    "description": "Three gnome elders of Heartleaf convene the Gnome Moot and rewrite Gnome Law while living under it: natural-language moves, self-amending rules, secret votes, deterministic Fate, and binding schema-checked Opus 4.8 rulings from the Elder. Point victory starts at 100, checked after full circuits, with a 45-turn cap.",
+    "description": "Three gnome elders of Heartleaf convene the Gnome Moot and rewrite Gnome Law while living under it: natural-language moves, self-amending rules, secret votes, deterministic Fate, and binding schema-checked Opus 4.7 rulings from the Elder. Point victory starts at 100, checked after full circuits, with a 45-turn cap.",
     "owner": "daveey@gmail.com",
     "runnable": {
       "type": "game",
@@ -194,7 +194,7 @@
     "docs": {
       "readme": {
         "type": "text",
-        "value": "# Gnomic\n\nThe gnomes of Heartleaf hold a Moot: three gnome elders act inside and rewrite Gnome Law, a self-amending game. Each turn is natural-language action, proposal, parallel debate, secret vote, and a binding ruling from the Elder (Claude Opus 4.8). A rejected action gets one repair. The initial law requires unanimity for two circuits, then two AYEs; adopted proposals give their proposer 3 points, rejected ones cost 1, and deterministic Fate gives a random seat 1d6 points. Point victory starts at 100 and is checked after complete circuits. Five procedural rules begin protected and require a separate unanimous transmutation before amendment. Co-winners split one tournament win point. The immutable host shell keeps three seats, bounded declarative operations, protocol safety, and a 45-turn cap."
+        "value": "# Gnomic\n\nThe gnomes of Heartleaf hold a Moot: three gnome elders act inside and rewrite Gnome Law, a self-amending game. Each turn is natural-language action, proposal, parallel debate, secret vote, and a binding ruling from the Elder (Claude Opus 4.7). A rejected action gets one repair. The initial law requires unanimity for two circuits, then two AYEs; adopted proposals give their proposer 3 points, rejected ones cost 1, and deterministic Fate gives a random seat 1d6 points. Point victory starts at 100 and is checked after complete circuits. Five procedural rules begin protected and require a separate unanimous transmutation before amendment. Co-winners split one tournament win point. The immutable host shell keeps three seats, bounded declarative operations, protocol safety, and a 45-turn cap."
       },
       "pages": [
         {
@@ -249,7 +249,7 @@
     {
       "id": "standard-3-opus",
       "name": "The Gnome Moot (3 Opus gnomes)",
-      "description": "Three gnome seats with free-text actions, protected and mutable Gnome Law, an Opus 4.8 Elder, seeded Fate, and play to lawful victory or the 45-turn host cap.",
+      "description": "Three gnome seats with free-text actions, protected and mutable Gnome Law, an Opus 4.7 Elder, seeded Fate, and play to lawful victory or the 45-turn host cap.",
       "game_config": {
         "num_agents": 3,
         "turns_max": 45,
@@ -259,7 +259,7 @@
         "vote_window_s": 600,
         "judge_window_s": 600,
         "judge_mode": "bedrock",
-        "judge_model": "us.anthropic.claude-opus-4-8",
+        "judge_model": "us.anthropic.claude-opus-4-7",
         "player_connect_timeout_seconds": 180,
         "episode_timeout_seconds": 7200,
         "players": [
@@ -288,7 +288,7 @@
         "vote_window_s": 360,
         "judge_window_s": 30,
         "judge_mode": "deterministic",
-        "judge_model": "us.anthropic.claude-opus-4-8",
+        "judge_model": "us.anthropic.claude-opus-4-7",
         "player_connect_timeout_seconds": 180,
         "episode_timeout_seconds": 1500,
         "players": [
@@ -315,7 +315,7 @@
       "vote_window_s": 2,
       "judge_window_s": 5,
       "judge_mode": "deterministic",
-      "judge_model": "us.anthropic.claude-opus-4-8",
+      "judge_model": "us.anthropic.claude-opus-4-7",
       "player_connect_timeout_seconds": 30,
       "episode_timeout_seconds": 240,
       "players": [

@@ -1,6 +1,6 @@
 """Schema-checked Gnomic judge implementations.
 
-Production uses Claude Opus 4.8 with adaptive, high-effort reasoning.  The model
+Production uses Claude Opus 4.7 with adaptive, high-effort reasoning.  The model
 can only return declarative rule/state operations; the pure engine validates and
 applies those atomically.  Certification uses ``DeterministicJudge`` and makes no
 network calls.  A production judge failure fails the episode instead of silently
@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from .engine import Board, OperationError, SEAT_COUNT
 
-DEFAULT_JUDGE_MODEL = "us.anthropic.claude-opus-4-8"
+DEFAULT_JUDGE_MODEL = "us.anthropic.claude-opus-4-7"
 DEFAULT_JUDGE_MAX_TOKENS = 32_768
 DEFAULT_JUDGE_TASK_BUDGET = 20_000
 TASK_BUDGET_BETA = "task-budgets-2026-03-13"
@@ -277,7 +277,7 @@ class BedrockJudge:
                 config=Config(
                     connect_timeout=10,
                     read_timeout=270,
-                    retries={"total_max_attempts": 1, "mode": "standard"},
+                    retries={"total_max_attempts": 3, "mode": "adaptive"},
                 ),
             )
         return self._client
@@ -364,7 +364,7 @@ class BedrockJudge:
                 last_error = exc
                 totals["latency_ms"] += round((time.monotonic() - started) * 1_000)
                 if attempt == 0:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(8.0)
                     continue
         raise JudgeError(f"Opus judge failed after two attempts: {type(last_error).__name__}: {last_error}")
 
@@ -427,7 +427,7 @@ class BedrockJudge:
                 last_error = exc
                 totals["latency_ms"] += round((time.monotonic() - started) * 1_000)
                 if attempt == 0:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(8.0)
                     continue
         raise JudgeError(
             f"Opus action judge failed after two attempts: {type(last_error).__name__}: {last_error}"
@@ -542,7 +542,7 @@ async def adjudicate(
     if not winners:
         winners = board.point_victors(turn=turn)
     return {
-        "source": "deterministic" if isinstance(judge, DeterministicJudge) else "opus-4.8",
+        "source": "deterministic" if isinstance(judge, DeterministicJudge) else "opus-4.7",
         "valid": ruling.valid,
         "adopted": ruling.adopted,
         "summary": ruling.summary,
@@ -575,7 +575,7 @@ async def adjudicate_action(
     if ruling.valid:
         board.apply_ops_atomic([], state_ops, turn=turn)
     return {
-        "source": "deterministic" if isinstance(judge, DeterministicJudge) else "opus-4.8",
+        "source": "deterministic" if isinstance(judge, DeterministicJudge) else "opus-4.7",
         "valid": ruling.valid,
         "summary": ruling.summary,
         "state_ops": state_ops,

@@ -28,9 +28,9 @@ covers every named and visible surface.
   Law, delegates→gnomes in every label and narration line.
 - **Muse pairs** rethemed to Heartleaf (soup, lanterns, mushrooms, burrows,
   harvest, gardens, badgers, curfew — one abstract partner word each).
-- **Policies**: `tools/ci/policies.json` uploads `gnomic-{ivan,anton,yura}-opus-4-8`
+- **Policies**: `tools/ci/policies.json` uploads `gnomic-{ivan,anton,yura}-opus-4-7`
   (game image, `python -m gnomic.players.llm`, `GNOMIC_PERSONA` env) plus
-  `gnomic-baseline` for fillers. Same Opus 4.8 scaffold as Nomic.
+  `gnomic-baseline` for fillers. Same Opus 4.7 scaffold as Nomic.
 - **Release**: `.github/workflows/coworld-release.yml` (Nomic's, slug swapped):
   build → certify (container-backed replay liveness) → upload policies →
   upload coworld. Judge uses platform Bedrock creds; no coworld secret.

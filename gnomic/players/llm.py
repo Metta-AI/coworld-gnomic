@@ -1,4 +1,4 @@
-"""Claude Opus 4.8 Gnomic policy with one selectable strategic persona.
+"""Claude Opus 4.7 Gnomic policy with one selectable strategic persona.
 
 Every strategic decision uses adaptive high-effort reasoning with an advisory
 task budget. Non-proposers make a fresh secret-vote decision after seeing both
@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from .client import main
 
-MODEL = "us.anthropic.claude-opus-4-8"
+MODEL = "us.anthropic.claude-opus-4-7"
 DEFAULT_MAX_TOKENS = 32_768
 DEFAULT_TASK_BUDGET = 20_000
 OUTCOME = Literal["sole_win", "co_win", "continues", "loss", "uncertain"]
@@ -239,7 +239,7 @@ class OpusPolicy:
                 config=Config(
                     connect_timeout=10,
                     read_timeout=570,
-                    retries={"total_max_attempts": 1, "mode": "standard"},
+                    retries={"total_max_attempts": 2, "mode": "adaptive"},
                 ),
             )
         return self._client
