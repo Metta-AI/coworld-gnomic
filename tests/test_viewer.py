@@ -75,5 +75,5 @@ def test_viewer_uses_gnomic_visual_language_without_kickers() -> None:
     ):
         assert generic_kicker not in HTML
     assert '<div class="seal" aria-hidden="true">❧</div>' in HTML
-    assert "--seat-1: #4fa8e8" in HTML
-    assert "--seat-2: #62d97e" in HTML
+    assert "--seat-1: #3d8fd4" in HTML
+    assert "--seat-2: #4aa64e" in HTML

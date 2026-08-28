@@ -197,6 +197,13 @@ def build_app(game: GameServer) -> FastAPI:
     def viewer() -> Response:
         return Response(_viewer_html(), media_type="text/html")
 
+    @app.get("/client/art/{name}.png")
+    def viewer_art(name: str) -> Response:
+        path = VIEWER_PATH.parent / "art" / f"{name}.png"
+        if not name.isidentifier() or not path.exists():
+            return Response(status_code=404)
+        return Response(path.read_bytes(), media_type="image/png")
+
     @app.websocket("/player")
     async def player_ws(websocket: WebSocket) -> None:
         try:

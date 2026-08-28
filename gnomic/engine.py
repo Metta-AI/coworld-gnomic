@@ -74,21 +74,21 @@ class Rule:
 def initial_rules() -> list[Rule]:
     """A compact, original-Gnomic-inspired starting constitution."""
     protected = [
-        "All players and the Judge must obey every active rule. When active rules conflict, the lower-numbered rule takes precedence unless another active rule explicitly resolves that conflict.",
+        "All gnomes and the Elder must obey every active rule. When active rules conflict, the lower-numbered rule takes precedence unless another active rule explicitly resolves that conflict.",
         "A proposal changes exactly one rule: it may enact one new mutable rule, amend or repeal one active mutable rule, or transmute one active protected rule into a mutable rule. Rule changes take effect in the ruling that adopts them.",
         "A protected rule cannot be amended or repealed. A proposal to transmute a protected rule requires all three AYE votes and does nothing except make that rule mutable; a later proposal is required to amend or repeal it.",
-        "The active player may state one natural-language game action before proposing. The action changes public state only when authorized by active rules. If rejected as illegal or unclear, that player receives one repair attempt; passing is always legal.",
-        "The Judge interprets the active Gnome Law faithfully. It may reject only an illegal, unclear, incoherent, impossible, or host-unsafe action or proposal, never one it merely considers unwise.",
+        "The active gnome may state one natural-language game action before proposing. The action changes public state only when authorized by active rules. If rejected as illegal or unclear, that gnome receives one repair attempt; passing is always legal.",
+        "The Elder interprets the active Gnome Law faithfully. It may reject only an illegal, unclear, incoherent, impossible, or host-unsafe action or proposal, never one it merely considers unwise.",
     ]
     mutable = [
         "Turns use the repeating proposer order [0, 1, 2]. A valid amendment to proposer order takes effect next turn at the first listed seat; the non-empty sequence may contain up to twelve seat numbers and may omit or repeat seats.",
-        "A proposal needs three AYE votes during turns 1 through 6. Beginning on turn 7 it needs two AYE votes, unless this rule has changed. The two non-proposers debate in parallel and all three players then vote secretly.",
-        "An adopted proposal gives its proposer 3 points. A proposal that fails its vote or is vetoed costs its proposer 1 point. No player receives points merely for voting AYE.",
-        "After each proposal ruling, Fate rolls one six-sided die and independently selects one of the three seats uniformly at random; the selected player gains the roll in points. The host supplies and records the random draws, and the Judge applies this rule after any newly adopted amendment.",
-        "Players begin with 0 points. At the end of each complete three-turn circuit, every player with at least 100 points wins; players reaching the threshold in that same circuit co-win. There is no point victory check between circuit ends.",
+        "A proposal needs three AYE votes during turns 1 through 6. Beginning on turn 7 it needs two AYE votes, unless this rule has changed. The two gnomes not proposing debate over tea in parallel, and all three gnomes then vote secretly.",
+        "An adopted proposal earns its proposer a hearty village supper worth 3 points. A proposal that fails its vote or is vetoed costs its proposer 1 point. No gnome receives points merely for voting AYE.",
+        "After each proposal ruling, Fate wanders the gardens and rolls one six-sided die, independently selecting one of the three gnomes uniformly at random; that gnome finds a basket of vegetables and gains the roll in points. The host supplies and records the random draws, and the Elder applies this rule after any newly adopted amendment.",
+        "Gnomes begin with 0 points. At the end of each complete three-turn circuit, every gnome with at least 100 points wins; gnomes reaching the threshold in that same circuit co-win. There is no point victory check between circuit ends.",
         "The action phase may be used for any move that an active rule authorizes. An action cannot itself enact, amend, repeal, or transmute a rule, and a newly adopted rule cannot retroactively authorize the action earlier in that turn.",
-        "Each game has two public muse words. They are nonbinding creative prompts: players should use, combine, subvert, or ignore them while trying to evolve a coherent and entertaining game.",
-        "If no rule has produced a winner by the 45-turn host cap, every player tied for the most points co-wins. Co-winners split one tournament win point equally.",
+        "Each game has two public muse words. They are nonbinding creative prompts: gnomes should use, combine, subvert, or ignore them while trying to evolve a coherent and entertaining game.",
+        "If no rule has produced a winner by the 45-turn host cap, every gnome tied for the most points co-wins. Co-winners split one tournament win point equally.",
     ]
     rules = [
         Rule(id=101 + index, text=text, mutable=False)
