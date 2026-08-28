@@ -2,17 +2,26 @@
   {
     "name": "gnomic-ivan-opus-4-8",
     "run": "python -m gnomic.players.llm",
-    "env": {"GNOMIC_PERSONA": "ivan"}
+    "env": {
+      "GNOMIC_PERSONA": "ivan",
+      "USE_BEDROCK": "true"
+    }
   },
   {
     "name": "gnomic-anton-opus-4-8",
     "run": "python -m gnomic.players.llm",
-    "env": {"GNOMIC_PERSONA": "anton"}
+    "env": {
+      "GNOMIC_PERSONA": "anton",
+      "USE_BEDROCK": "true"
+    }
   },
   {
     "name": "gnomic-yura-opus-4-8",
     "run": "python -m gnomic.players.llm",
-    "env": {"GNOMIC_PERSONA": "yura"}
+    "env": {
+      "GNOMIC_PERSONA": "yura",
+      "USE_BEDROCK": "true"
+    }
   },
   {
     "name": "gnomic-baseline",
