@@ -1,5 +1,5 @@
 {
-  "deployed_at": "2026-08-28T01:55:00Z",
+  "deployed_at": "2026-08-28T05:40:00Z",
   "repository": {
     "url": "https://github.com/Metta-AI/coworld-gnomic",
     "visibility": "public",
@@ -11,8 +11,8 @@
   },
   "coworld": {
     "name": "gnomic",
-    "version": "0.1.2",
-    "id": "cow_b32b8781-2c28-42d3-9d63-8e30520e5811",
+    "version": "0.1.3",
+    "id": "cow_31a8dfdf-3237-4582-8641-9206eddc00b7",
     "canonical": true,
     "players_per_user": 3,
     "episode_timeout_minutes": 100,
@@ -26,6 +26,11 @@
         "version": "0.1.1",
         "id": "cow_90553893-deb4-49c1-9298-4e3ed430916d",
         "note": "cozy redesign; players lacked USE_BEDROCK and opus-4-8 daily quota crashed the judge"
+      },
+      {
+        "version": "0.1.2",
+        "id": "cow_b32b8781-2c28-42d3-9d63-8e30520e5811",
+        "note": "opus-4-7 switch; superseded by the named-seats release"
       }
     ]
   },
@@ -46,35 +51,34 @@
     {
       "persona": "Ivan",
       "player": "daveey",
-      "policy": "gnomic-ivan-opus-4-7:v1",
-      "policy_version_id": "58076aa9-c7ad-4036-9708-90d06fa694b2"
+      "policy": "gnomic-ivan-opus-4-7:v2",
+      "policy_version_id": "09a95959-3447-4f9f-82cd-9dd784d71bb9"
     },
     {
       "persona": "Anton",
       "player": "daveey-1",
-      "policy": "gnomic-anton:v3",
-      "policy_version_id": "723b5a22-94a3-4d83-8e72-af526b7a4b40"
+      "policy": "gnomic-anton:v4",
+      "policy_version_id": "14532119-11d0-4384-a862-258cd98b30b6"
     },
     {
       "persona": "Yura",
       "player": "parley-rival",
-      "policy": "gnomic-yura:v3",
-      "policy_version_id": "3f78c4bc-709b-4416-9aa7-83de29c007b4"
+      "policy": "gnomic-yura:v4",
+      "policy_version_id": "a3d01626-458c-4ccc-806d-f9f4048874f4"
     }
   ],
   "fillers": [
     {
-      "policy": "gnomic-baseline:v3",
-      "policy_version_id": "81de7b8a-986d-49fe-b079-20008617a91a"
+      "policy": "gnomic-baseline:v4"
     }
   ],
   "validation": {
-    "round_5_episode": "ereq_59f8f025-0ae1-4103-9588-ec15346ee34e",
-    "replay_url": "https://softmax-public.s3.amazonaws.com/replays/7b054ada-7700-45b1-ad33-9a5390c5fe71.replay",
+    "round_8_episode": "ereq_cd9501ad-daa1-43ab-8d2c-069d8d15702e",
+    "replay_url": "https://softmax-public.s3.amazonaws.com/replays/f05e4740-0131-43fa-9dba-d2ede5209390.replay",
     "turns_played": 45,
     "fallback_decisions": 0,
     "termination": "constitution_victory",
-    "winner": "Yura (parley-rival), 82 points; enacted laws incl. the Heartleaf Mushroom Ledger and Ritual Circle",
-    "notes": "league seats are labeled by softmax player name; gnome identity shows in the policy label and game content"
+    "winner": "Yura (parley-rival), 103-99-97",
+    "seat_names": "replay players carry {policy: gnome name, player: owner}; agents see gnome names only"
   }
 }
