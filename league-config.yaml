@@ -1,0 +1,62 @@
+schedule_interval_minutes: 1440
+
+scoring:
+  round_score: win
+  leaderboard:
+    type: ewma
+    half_life_hours: 168
+
+defaults:
+  seating: shuffled_window
+  team_count: 3
+  fill_seats: duplicate
+  min_entries_to_start: 1
+  stage:
+    label: Daily Round
+    episodes: 1
+    min_episodes_per_entrant: 1
+
+divisions:
+  qualifiers:
+    name: Qualifiers
+    level: -99
+    description: One-turn hosted crash check before Competition placement.
+    match:
+      name: Qualifiers
+      type: staging
+    entrants: qualifying
+    min_entries_to_start: 1
+    stages:
+      - id: crash_check
+        schedule:
+          label: Qualifier
+          self_play: true
+          attempts: 1
+          min_episodes_per_entrant: 1
+        on_episode_complete:
+          - id: qualified
+            criteria:
+              completed_episodes_gt: 0
+            actions:
+              - type: update_membership
+                division: competition
+                status: competing
+                substatus: champion
+          - id: disqualified
+            criteria: otherwise
+            actions:
+              - type: update_membership
+                status: disqualified
+                substatus: inactive
+
+  competition:
+    name: Competition
+    level: 1
+    description: >-
+      Three-seat Gnomic tables. Daily rounds are scored only by episode wins;
+      standings use a seven-day-half-life EWMA. Co-winners share the win.
+    match:
+      name: Competition
+      type: competition
+    entrants: champions
+    min_entries_to_start: 1

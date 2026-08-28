@@ -1,0 +1,15 @@
+.venv/
+.coworld-venv/
+.uv-cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+coworld_manifest.json
+artifacts/
+tmp/
+.env

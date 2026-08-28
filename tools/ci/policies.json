@@ -1,0 +1,22 @@
+[
+  {
+    "name": "gnomic-ivan-opus-4-8",
+    "run": "python -m gnomic.players.llm",
+    "env": {"GNOMIC_PERSONA": "ivan"}
+  },
+  {
+    "name": "gnomic-anton-opus-4-8",
+    "run": "python -m gnomic.players.llm",
+    "env": {"GNOMIC_PERSONA": "anton"}
+  },
+  {
+    "name": "gnomic-yura-opus-4-8",
+    "run": "python -m gnomic.players.llm",
+    "env": {"GNOMIC_PERSONA": "yura"}
+  },
+  {
+    "name": "gnomic-baseline",
+    "run": "python -m gnomic.players.baseline",
+    "env": {}
+  }
+]

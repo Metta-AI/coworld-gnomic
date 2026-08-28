@@ -1,0 +1,34 @@
+# CI for the Gnomic coworld repo (Metta-AI/coworld-gnomic).
+#
+# Two jobs: the Python test suite, and a build of both compose images so a
+# broken Dockerfile is caught before `coworld build` hits it in a release.
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: Run the test suite
+        run: uv run --extra dev pytest tests/ -q
+
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the game and commissioner images
+        run: docker compose build

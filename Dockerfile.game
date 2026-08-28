@@ -1,0 +1,11 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    AWS_REGION=us-west-2
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY gnomic ./gnomic
+RUN pip install --no-cache-dir .
+EXPOSE 8080
+CMD ["python", "-m", "gnomic.server.app"]

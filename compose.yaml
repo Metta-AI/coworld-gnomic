@@ -1,0 +1,13 @@
+services:
+  gnomic:
+    image: coworld-gnomic:latest
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.game
+  commissioner:
+    image: coworld-gnomic-commissioner:latest
+    platform: linux/amd64
+    build:
+      context: commissioner
+      dockerfile: Dockerfile
