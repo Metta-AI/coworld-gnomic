@@ -123,6 +123,11 @@
           "type": "number",
           "minimum": 60,
           "maximum": 7200
+        },
+        "introduce_window_s": {
+          "type": "number",
+          "minimum": 0.05,
+          "maximum": 60
         }
       }
     },

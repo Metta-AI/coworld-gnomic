@@ -6,8 +6,13 @@ ignored. Late, malformed, or missing actions receive deterministic defaults.
 
 Server state messages:
 
-- `game_start`: session/seats, your seat, host constraints, complete rulebook,
-  public state, and completed history.
+- `introduce_request`: sent once before `game_start`; reply
+  `{"rid": ..., "name": "<your gnome name>"}` (at most 40 printable characters)
+  to claim your seat's display name. A missing or malformed reply assigns the
+  seat's Heartleaf house default (Ivan, Anton, Yura); duplicate names get a
+  numeric suffix. Seat names shown to players never reveal seat ownership.
+- `game_start`: session/seats (gnome display names only), your seat, host
+  constraints, complete rulebook, public state, and completed history.
 - `turn_start`: turn, proposer, current vote threshold, complete rules and state.
   In that state, `proposer_cursor` points to the next regular entry after the
   current proposer. `proposer_order` may omit or repeat seats.

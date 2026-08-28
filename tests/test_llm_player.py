@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 
@@ -232,3 +233,9 @@ def test_reconnect_history_is_compacted_before_future_prompts() -> None:
     serialized = json.dumps(policy.history)
     assert len(serialized) < 5_000
     assert any(item["type"] == "judge_ruling" for item in policy.history)
+
+
+def test_policy_introduces_itself_with_its_gnome_name() -> None:
+    policy = OpusPolicy("anton", client=FakeBedrock())
+    reply = asyncio.run(policy.respond({"type": "introduce_request", "rid": 7}))
+    assert reply == {"rid": 7, "name": "Anton"}

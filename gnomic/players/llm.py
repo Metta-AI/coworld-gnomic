@@ -519,6 +519,8 @@ phase. In particular, debates are parallel and have no mutable debate order."""
 
     async def respond(self, message: dict[str, Any]) -> dict[str, Any] | None:
         kind = message.get("type")
+        if kind == "introduce_request":
+            return {"rid": message["rid"], "name": self.persona.capitalize()}
         if kind == "game_start":
             self.seat = int(message["you"]["seat"])
             self.host_constraints = [

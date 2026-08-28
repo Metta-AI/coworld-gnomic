@@ -193,6 +193,7 @@
     .avatar img { width: 100%; height: 100%; object-fit: cover; object-position: top; image-rendering: pixelated; }
     .delegate-copy { min-width: 0; }
     .delegate-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; }
+    .delegate-owner { color: var(--muted); font-weight: 400; font-size: 11px; }
     .delegate-role { margin-top: 3px; color: var(--muted); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; }
     .score { min-width: 34px; text-align: right; color: var(--accent); font: 500 25px/1 var(--serif); }
     .score small { display: block; margin-top: 3px; color: var(--muted); font: 8px/1 var(--sans); letter-spacing: .1em; text-transform: uppercase; }
@@ -747,7 +748,7 @@
       const isWinner = state.winners.includes(seat);
       return `<article class="delegate seat-${seat % 3} ${isProposer ? "proposer" : ""} ${isWinner ? "winner" : ""}" data-seat="${seat}">
         <div class="avatar" aria-hidden="true">${gnomeFace(player.policy) || roman[seat] || seat + 1}</div>
-        <div class="delegate-copy"><div class="delegate-name">${esc(player.policy || seatLabel(seat))}</div><div class="delegate-role">${isWinner ? "Winner" : isProposer ? "Has the floor" : seatLabel(seat)}</div></div>
+        <div class="delegate-copy"><div class="delegate-name">${esc(player.policy || seatLabel(seat))}${player.player ? `<span class="delegate-owner"> (${esc(player.player)})</span>` : ""}</div><div class="delegate-role">${isWinner ? "Winner" : isProposer ? "Has the floor" : seatLabel(seat)}</div></div>
         <div class="score">${esc(points)}<small>points</small></div>
         <div class="meter" title="${points} of ${threshold} victory points"><span style="width:${progress}%"></span></div>
       </article>`;

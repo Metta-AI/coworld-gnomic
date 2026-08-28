@@ -6,6 +6,11 @@ then live events. Events are `game_start`, `turn_start`, `action_made`,
 `game_over`, and `final`. There is
 no private player state or model reasoning in this stream.
 
+`game_start.session.seats` rows carry `policy` (the seat's gnome display name,
+claimed via `introduce_request` or the house default) and `player` (the owning
+platform player, e.g. "daveey"). The `player` attribution appears only on this
+spectator stream and in replays — agents see gnome names alone.
+
 In replay mode, `/replay` sends one message:
 
 ```json

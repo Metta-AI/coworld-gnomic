@@ -12,6 +12,11 @@ from ..judge import BedrockJudge, DeterministicJudge, Judge, adjudicate, adjudic
 from .channel import SeatChannel
 from .config import GameConfig
 
+# Fixed house names by seat, per Heartleaf lore: House One is Ivan's, and so on.
+# A policy may claim its own gnome name through introduce_request; these are the
+# defaults for seats whose policy never answers (baselines, vacant seats).
+GNOME_SEAT_NAMES = ["Ivan", "Anton", "Yura"]
+
 Broadcast = Callable[[dict[str, Any]], Awaitable[None]]
 
 
@@ -38,6 +43,7 @@ class Episode:
         self.winner_slots: list[int] = []
         self.termination = ""
         self.judge_usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "latency_ms": 0}
+        self.seat_names: list[str] = list(GNOME_SEAT_NAMES)
         self.judge: Judge = (
             DeterministicJudge()
             if config.judge_mode == "deterministic"
@@ -48,11 +54,41 @@ class Episode:
         self._rid += 1
         return self._rid
 
-    def _seats(self) -> list[dict[str, Any]]:
-        return [
-            {"seat": seat, "policy": self.config.players[seat].name}
-            for seat in range(SEAT_COUNT)
-        ]
+    def _seats(self, *, attributed: bool = False) -> list[dict[str, Any]]:
+        """Seat rows for one audience.
+
+        Agents only ever see the gnome names; the spectator stream and the
+        replay additionally carry each seat's owning platform player.
+        """
+        rows: list[dict[str, Any]] = []
+        for seat in range(SEAT_COUNT):
+            row: dict[str, Any] = {"seat": seat, "policy": self.seat_names[seat]}
+            if attributed:
+                row["player"] = self.config.players[seat].name
+            rows.append(row)
+        return rows
+
+    async def _collect_introductions(self) -> None:
+        """Ask every seat for its gnome name before the Moot is called to order."""
+
+        async def ask(channel: SeatChannel) -> str | None:
+            rid = self._next_rid()
+            await channel.send({"type": "introduce_request", "rid": rid})
+            reply = await channel.recv_reply(rid, self.config.introduce_window_s)
+            name = reply.get("name") if isinstance(reply, dict) else None
+            return name if isinstance(name, str) else None
+
+        raw = await asyncio.gather(*(ask(channel) for channel in self.channels))
+        used: dict[str, int] = {}
+        names: list[str] = []
+        for seat in range(SEAT_COUNT):
+            name = "".join(ch for ch in (raw[seat] or "").strip() if ch.isprintable())[:40].strip()
+            if not name:
+                name = GNOME_SEAT_NAMES[seat]
+            count = used.get(name.lower(), 0) + 1
+            used[name.lower()] = count
+            names.append(name if count == 1 else f"{name} ({count})")
+        self.seat_names = names
 
     async def _emit(self, message: dict[str, Any]) -> None:
         self.events.append(message)
@@ -63,6 +99,7 @@ class Episode:
         await asyncio.gather(*(channel.send(message) for channel in self.channels))
 
     async def _announce_start(self) -> None:
+        await self._collect_introductions()
         session = {
             "id": f"gnomic-{self.seed:08x}",
             "seats": self._seats(),
@@ -83,7 +120,7 @@ class Episode:
         await self._emit(
             {
                 "type": "game_start",
-                "session": session,
+                "session": {**session, "seats": self._seats(attributed=True)},
                 "host_constraints": list(HOST_CONSTRAINTS),
                 "rules": self.board.rules_dict(),
                 "state": self.board.state.as_dict(),
@@ -463,7 +500,7 @@ class Episode:
         replay = {
             "format": "gnomic-replay-v1",
             "seed": self.seed,
-            "players": self._seats(),
+            "players": self._seats(attributed=True),
             "events": self.events,
             "turns": self.history,
             "final_board": self.board.as_dict(),

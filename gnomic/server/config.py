@@ -26,6 +26,7 @@ class GameConfig(BaseModel):
     debate_window_s: float = Field(default=600.0, ge=0.05, le=600)
     vote_window_s: float = Field(default=600.0, ge=0.05, le=600)
     judge_window_s: float = Field(default=600.0, ge=1, le=600)
+    introduce_window_s: float = Field(default=15.0, ge=0.05, le=60)
     judge_mode: Literal["bedrock", "deterministic"] = "bedrock"
     judge_model: str = "us.anthropic.claude-opus-4-7"
     seed: int | None = None

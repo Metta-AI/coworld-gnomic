@@ -20,6 +20,7 @@ def config(**overrides) -> GameConfig:
         "debate_window_s": 0.5,
         "vote_window_s": 0.5,
         "judge_window_s": 2,
+        "introduce_window_s": 0.2,
         "episode_timeout_seconds": 60,
     }
     values.update(overrides)
@@ -137,3 +138,79 @@ async def test_rejected_action_gets_one_player_repair_attempt() -> None:
     assert actions[1]["action"]["text"] == "pass"
     assert [event["valid"] for event in rulings] == [False, True]
     assert any(event["type"] == "proposal_made" for event in emitted)
+
+
+@pytest.mark.asyncio
+async def test_introductions_set_gnome_names_with_owner_attribution_for_spectators() -> None:
+    channels = [InProcessChannel(i) for i in range(3)]
+    names = ["Yura", "Yura", ""]  # duplicate claim + one silent seat
+
+    async def introducer(channel: InProcessChannel, name: str) -> None:
+        policy = BaselinePolicy()
+        while True:
+            message = await channel.player_recv()
+            if message.get("type") == "final":
+                return
+            if message.get("type") == "introduce_request":
+                if name:
+                    await channel.player_send({"rid": message["rid"], "name": name})
+                continue
+            reply = await policy.respond(message)
+            if reply is not None:
+                await channel.player_send(reply)
+
+    tasks = [
+        asyncio.create_task(introducer(channel, names[seat]))
+        for seat, channel in enumerate(channels)
+    ]
+    emitted: list[dict] = []
+
+    async def broadcast(message: dict) -> None:
+        emitted.append(message)
+
+    episode = Episode(config(turns_max=3), channels, seed=7, broadcast=broadcast)
+    results, replay = await episode.run()
+    for channel in channels:
+        await channel.send({"type": "final", "scores": results["scores"]})
+    await asyncio.gather(*tasks)
+
+    # Duplicates are suffixed; the silent seat 2 falls back to its house default
+    # (also Yura), taking the third suffix.
+    assert episode.seat_names == ["Yura", "Yura (2)", "Yura (3)"]
+
+    # Replay and the spectator game_start carry the owning player; agents never see it.
+    assert all("player" in row for row in replay["players"])
+    spectator_start = next(e for e in emitted if e["type"] == "game_start")
+    assert all("player" in row for row in spectator_start["session"]["seats"])
+
+
+@pytest.mark.asyncio
+async def test_player_facing_game_start_never_reveals_seat_ownership() -> None:
+    channels = [InProcessChannel(i) for i in range(3)]
+    player_starts: list[dict] = []
+
+    async def driver(channel: InProcessChannel) -> None:
+        policy = BaselinePolicy()
+        while True:
+            message = await channel.player_recv()
+            if message.get("type") == "final":
+                return
+            if message.get("type") == "game_start":
+                player_starts.append(message)
+            reply = await policy.respond(message)
+            if reply is not None:
+                await channel.player_send(reply)
+
+    tasks = [asyncio.create_task(driver(channel)) for channel in channels]
+    episode = Episode(config(turns_max=3), channels, seed=9)
+    results, _ = await episode.run()
+    for channel in channels:
+        await channel.send({"type": "final", "scores": results["scores"]})
+    await asyncio.gather(*tasks)
+
+    assert len(player_starts) == 3
+    for start in player_starts:
+        seats = start["session"]["seats"]
+        assert [row["policy"] for row in seats] == ["Ivan", "Anton", "Yura"]
+        assert all("player" not in row for row in seats)
+        assert "Alpha" not in str(seats)
