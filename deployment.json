@@ -1,0 +1,40 @@
+{
+  "deployed_at": "2026-08-28T00:30:00Z",
+  "repository": {
+    "url": "https://github.com/Metta-AI/coworld-gnomic",
+    "visibility": "public",
+    "branch": "main"
+  },
+  "lineage": {
+    "game": "Metta-AI/coworld-nomic @ e92488d (0.2.3)",
+    "theme": "Metta-AI/coworld-heartleaf (cast, Gnome Law, PICO-8 palette, banner-anchored art)"
+  },
+  "coworld": {
+    "name": "gnomic",
+    "version": "0.1.1",
+    "id": "cow_90553893-deb4-49c1-9298-4e3ed430916d",
+    "canonical": true,
+    "players_per_user": 3,
+    "episode_timeout_minutes": 100,
+    "previous_versions": [
+      {"version": "0.1.0", "id": "cow_2498c458-98ab-45f8-8227-66401a1c6087", "note": "pre-redesign; superseded"}
+    ]
+  },
+  "league": {
+    "id": "league_4788bdc9-67da-4b00-a8e2-265a8169e7f7",
+    "seed_id": "lseed_76a4c44e-d101-4b06-ad97-635c644d0e66",
+    "commissioner_key": "platform",
+    "competition_division_id": "div_d94d6cc7-669f-4461-8c4c-34fc7af4c0fa",
+    "round_interval_minutes": 1440,
+    "daily_budget_usd": 15.0,
+    "scoring": {"round_score": "win", "standing": "ewma", "half_life_hours": 168}
+  },
+  "players": [
+    {"persona": "Ivan", "policy": "gnomic-ivan-opus-4-8:v2", "policy_version_id": "e31ab560-f3ce-49a5-83f7-c6d54b67fdad"},
+    {"persona": "Anton", "policy": "gnomic-anton-opus-4-8:v2", "policy_version_id": "84584010-adac-4c08-986d-bd8e55875631"},
+    {"persona": "Yura", "policy": "gnomic-yura-opus-4-8:v2", "policy_version_id": "aae3ef5d-3578-4d26-9f37-db590b4ebd8a"}
+  ],
+  "fillers": [
+    {"policy": "gnomic-baseline:v2", "policy_version_id": "c5964f7f-46f9-4b7a-b8cf-b78eade61080"}
+  ]
+}
