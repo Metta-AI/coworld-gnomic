@@ -4,6 +4,11 @@ Connect JSON-over-WebSocket to the URL in `COWORLD_PLAYER_WS_URL`. Every request
 has a unique `rid`; echo it in the response. Unknown server messages should be
 ignored. Late, malformed, or missing actions receive deterministic defaults.
 
+The bundled `gnomic.players.sdk.Policy` exposes `introduce`, `action`,
+`propose`, `debate`, and `vote` callbacks for these same requests. The SDK
+passes an `action_repair_request` to `action` with the original action and
+rejection reason in `GameView.request`.
+
 Server state messages:
 
 - `introduce_request`: sent once before `game_start`; reply

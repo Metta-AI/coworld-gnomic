@@ -1,6 +1,8 @@
-"""Player SDK: implement three callbacks and the harness ensures legal play.
+"""Player SDK: implement five callbacks and the harness ensures legal play.
 
     class MyPolicy(Policy):
+        def introduce(self, view) -> str: ...
+        def action(self, view) -> str: ...
         def propose(self, view) -> dict: ...
         def debate(self, view) -> dict: ...
         def vote(self, view) -> str:  # "aye" | "nay"
@@ -42,6 +44,7 @@ class GameView:
 
     seat: int = -1
     session: dict = field(default_factory=dict)
+    host_constraints: list[str] = field(default_factory=list)
     rules: list[dict] = field(default_factory=list)
     state: dict = field(default_factory=dict)
     history: list[dict] = field(default_factory=list)
@@ -52,6 +55,7 @@ class GameView:
     votes: list[dict] = field(default_factory=list)
     last_ruling: dict = field(default_factory=dict)
     game_over: dict = field(default_factory=dict)
+    request: dict = field(default_factory=dict)
 
     @property
     def num_players(self) -> int:
@@ -72,8 +76,11 @@ class GameView:
 
     def fold(self, msg: dict) -> None:
         mtype = msg.get("type")
+        if isinstance(mtype, str) and mtype.endswith("_request"):
+            self.request = msg
         if mtype == "game_start":
             self.session = msg.get("session", {})
+            self.host_constraints = msg.get("host_constraints", [])
             self.seat = msg.get("you", {}).get("seat", self.seat)
             self.rules = msg.get("rules", [])
             self.state = msg.get("state", {})
@@ -86,8 +93,11 @@ class GameView:
             self.proposal = {}
             self.debates = []
             self.votes = []
+            self.request = {}
         elif mtype == "proposal_made":
             self.proposal = msg.get("proposal", {})
+        elif mtype == "action_ruling":
+            self.state = msg.get("state", self.state)
         elif mtype == "debate_made":
             self.debates = list(msg.get("statements", []))
         elif mtype == "debate_request":
@@ -119,8 +129,14 @@ class GameView:
 
 
 class Policy:
-    """Override the three decision callbacks. Raising or overrunning a window is
+    """Override the five decision callbacks. Raising or overrunning a window is
     safe (the server defaults) but fails the conformance gate."""
+
+    def introduce(self, view: GameView) -> str:
+        raise NotImplementedError
+
+    def action(self, view: GameView) -> str:
+        raise NotImplementedError
 
     def propose(self, view: GameView) -> dict:
         raise NotImplementedError
@@ -224,7 +240,19 @@ class PlayerSession:
         except Exception:  # noqa: BLE001 - observer hooks never crash the loop
             pass
         mtype = msg.get("type")
-        if mtype == "proposal_request":
+        if mtype == "introduce_request":
+            name = await self._callback("introduce", msg.get("timeout_s", 15))
+            if isinstance(name, str) and name.strip():
+                await self.transport.send(make_reply(msg["rid"], {"name": name}))
+            elif name is not None:
+                self.defaults.append(DefaultEvent(self.view.turn, "introduce", "empty return"))
+        elif mtype in {"action_request", "action_repair_request"}:
+            action = await self._callback("action", msg.get("timeout_s", 10))
+            if isinstance(action, str) and action.strip():
+                await self.transport.send(make_reply(msg["rid"], {"action": action}))
+            elif action is not None:
+                self.defaults.append(DefaultEvent(self.view.turn, "action", "empty return"))
+        elif mtype == "proposal_request":
             proposal = await self._callback("propose", msg.get("timeout_s", 10))
             if isinstance(proposal, dict):
                 await self.transport.send(make_reply(msg["rid"], {"proposal": proposal}))

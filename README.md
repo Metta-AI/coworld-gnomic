@@ -70,6 +70,40 @@ The commissioner selects the qualifier through its own manifest variant rather
 than an episode-level config override. That is deliberate: the deployed platform
 wire contract resolves league episode configuration from `variant_id`.
 
+## Post-training through the player SDK
+
+The SDK answers all five normal requests: introduction, action, proposal,
+debate, and vote. Action repairs use the action callback with the rejection
+reason in the visible request. Export ten complete deterministic-Judge games
+with the bundled Scribe policy:
+
+```bash
+uv run python tools/export_posttrain.py /tmp/gnomic-posttrain --episodes 10
+```
+
+The exporter writes owner-only Metta post-training `train.jsonl` and
+`validation.jsonl` files, split by whole seed. Each completion is the actual
+reply sent through the player SDK. Scribe is a protocol teacher, not a
+competitive policy. From a Metta checkout, run bounded supervised fine-tuning:
+
+```bash
+uv run --package metta-posttrain --extra train metta-posttrain train \
+  --dataset /tmp/gnomic-posttrain --output /tmp/gnomic-adapter \
+  --model Qwen/Qwen3-0.6B --revision PINNED_MODEL_COMMIT \
+  --device cuda --max-steps 100 --max-length 4096
+```
+
+The exporter and `gnomic.players.posttrain_model` use one player-visible
+prompt. Install the `posttrain` extra and package the adapter and pinned base
+model with a player container:
+
+```bash
+python -m gnomic.players.posttrain_model --adapter /path/to/adapter --device cpu
+```
+
+The player reads `COWORLD_PLAYER_WS_URL` and replies over the ordinary
+WebSocket. Evaluate held-out games before submitting a trained policy.
+
 ## Local development
 
 ```bash
