@@ -25,6 +25,12 @@ PROPOSAL_TEMPLATES = [
 
 
 class ScribePolicy(Policy):
+    def introduce(self, view: GameView) -> str:
+        return "Scribe"
+
+    def action(self, view: GameView) -> str:
+        return "pass"
+
     def propose(self, view: GameView) -> dict:
         idx = stable_rng_int("propose", view.seat, view.turn, mod=len(PROPOSAL_TEMPLATES))
         text = PROPOSAL_TEMPLATES[idx].format(seat=view.seat)
