@@ -258,7 +258,7 @@ class Judge(Protocol):
 
 class LlmJudge:
     def __init__(self, model_id: str | None = None, *, client: Any | None = None) -> None:
-        self.model_id = (os.environ.get("COWORLD_LLM_MODEL", "anthropic/claude-sonnet-4.6")
+        self.model_id = (os.environ.get("COWORLD_LLM_MODEL", "anthropic/claude-opus-4.7")
                          if os.environ.get("COWORLD_LLM_ENDPOINT")
                          else model_id or os.environ.get("JUDGE_MODEL", DEFAULT_JUDGE_MODEL))
         self.max_tokens = int(os.environ.get("GNOMIC_JUDGE_MAX_TOKENS", str(DEFAULT_JUDGE_MAX_TOKENS)))

@@ -50,3 +50,11 @@ def test_native_judge_and_players_route_without_aws_credentials(monkeypatch):
         assert "anthropic_version" not in payload
         assert "output_config" not in payload
         assert "anthropic_beta" not in payload
+
+
+def test_native_opus_defaults_preserve_game_model_family(monkeypatch):
+    monkeypatch.setenv("COWORLD_LLM_ENDPOINT", "http://sidecar")
+    monkeypatch.delenv("COWORLD_LLM_MODEL", raising=False)
+    assert LlmJudge().model_id == "anthropic/claude-opus-4.7"
+    assert OpusPolicy().model == "anthropic/claude-opus-4.7"
+    assert LlmClient().model_id == "anthropic/claude-haiku-4.5"

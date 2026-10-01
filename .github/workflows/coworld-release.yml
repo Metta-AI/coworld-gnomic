@@ -217,7 +217,9 @@ jobs:
                   cmd = ["uvx", "--from", pkg, "coworld", "upload-policy", image, "--name", name]
                   for token in argv:
                       cmd += ["--run", token]
-                  if any("players.llm" in token or "haiku_baseline" in token for token in argv):
+                  if any("players.llm" in token for token in argv):
+                      cmd += ["--use-llm", "--llm-model", "anthropic/claude-opus-4.7"]
+                  elif any("haiku_baseline" in token for token in argv):
                       cmd += ["--use-llm", "--llm-model", "anthropic/claude-haiku-4.5"]
                   for key, value in (row.get("env") or {}).items():
                       cmd += ["--secret-env", f"{key}={value}"]
