@@ -8,6 +8,8 @@ blindly reused as the final vote.
 
 from __future__ import annotations
 
+from gnomic.llm_transport import complete_native
+
 import asyncio
 import json
 import os
@@ -206,7 +208,9 @@ class OpusPolicy:
         self.persona = (persona or os.environ.get("GNOMIC_PERSONA", "ivan")).lower()
         if self.persona not in PERSONAS:
             raise ValueError(f"unknown GNOMIC_PERSONA {self.persona!r}")
-        self.model = os.environ.get("BEDROCK_MODEL", MODEL)
+        self.model = (os.environ.get("COWORLD_LLM_MODEL", "anthropic/claude-haiku-4.5")
+                         if os.environ.get("COWORLD_LLM_ENDPOINT")
+                         else os.environ.get("BEDROCK_MODEL", MODEL))
         self.max_tokens = int(os.environ.get("GNOMIC_PLAYER_MAX_TOKENS", str(DEFAULT_MAX_TOKENS)))
         if self.max_tokens < 4_096:
             raise ValueError("GNOMIC_PLAYER_MAX_TOKENS must be at least 4096 with extended reasoning")
@@ -258,8 +262,11 @@ class OpusPolicy:
             },
             "messages": [{"role": "user", "content": prompt}],
         }
-        response = self._bedrock().invoke_model(modelId=self.model, body=json.dumps(body))
-        payload = json.loads(response["body"].read())
+        if os.environ.get("COWORLD_LLM_ENDPOINT"):
+            payload = complete_native(body, self.model)
+        else:
+            response = self._bedrock().invoke_model(modelId=self.model, body=json.dumps(body))
+            payload = json.loads(response["body"].read())
         usage = payload.get("usage") or {}
         self.usage["calls"] += 1
         self.usage["input_tokens"] += int(usage.get("input_tokens", 0))

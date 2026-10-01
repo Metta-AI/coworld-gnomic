@@ -6,7 +6,7 @@ import json
 import pytest
 
 from gnomic.engine import Board
-from gnomic.judge import ACTION_JUDGE_SYSTEM, JUDGE_SYSTEM, BedrockJudge, DeterministicJudge, JudgeError, adjudicate, adjudicate_action
+from gnomic.judge import ACTION_JUDGE_SYSTEM, JUDGE_SYSTEM, LlmJudge, DeterministicJudge, JudgeError, adjudicate, adjudicate_action
 
 
 def test_judge_must_preserve_exact_proposer_sequence() -> None:
@@ -74,7 +74,7 @@ async def test_bedrock_judge_repairs_bad_json_once_and_uses_adaptive_high() -> N
     }
     fake = FakeBedrock([response("not json"), response(json.dumps(fixed))])
     board = Board.initial()
-    ruling = await adjudicate(board, turn_record=record(), turn=1, turns_max=9, judge=BedrockJudge(client=fake))
+    ruling = await adjudicate(board, turn_record=record(), turn=1, turns_max=9, judge=LlmJudge(client=fake))
     assert ruling["usage"]["calls"] == 2
     assert board.state.points(0) == 10
     assert fake.bodies[0]["thinking"] == {"type": "adaptive"}
@@ -98,7 +98,7 @@ async def test_bedrock_judge_never_adopts_failed_vote() -> None:
     }
     fake = FakeBedrock([response(json.dumps(bad)), response(json.dumps(bad))])
     with pytest.raises(JudgeError, match="failed vote"):
-        await BedrockJudge(client=fake).rule(Board.initial(), record(passed=False), 1, 9)
+        await LlmJudge(client=fake).rule(Board.initial(), record(passed=False), 1, 9)
 
 
 @pytest.mark.asyncio
@@ -117,7 +117,7 @@ async def test_bedrock_judge_repairs_rewritten_rule_text() -> None:
         "rule_ops": [{"op": "enact", "text": "Tea is encouraged."}],
     }
     fake = FakeBedrock([response(json.dumps(rewritten)), response(json.dumps(exact))])
-    ruling, usage = await BedrockJudge(client=fake).rule(Board.initial(), record(), 1, 9)
+    ruling, usage = await LlmJudge(client=fake).rule(Board.initial(), record(), 1, 9)
     assert ruling.rule_dicts() == [{"op": "enact", "text": "Tea is encouraged."}]
     assert usage["calls"] == 2
 
@@ -141,7 +141,7 @@ async def test_action_judge_interprets_natural_language_as_bounded_state_only() 
         action_record={"player": 1, "text": "I spend my key."},
         turn=4,
         turns_max=45,
-        judge=BedrockJudge(client=fake),
+        judge=LlmJudge(client=fake),
     )
 
     assert ruling["valid"] is True
