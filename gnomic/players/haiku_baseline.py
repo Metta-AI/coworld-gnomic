@@ -8,6 +8,8 @@ for building your own LLM player.
 
 from __future__ import annotations
 
+from gnomic.llm_transport import complete_native
+
 import json
 import os
 import sys
@@ -27,9 +29,11 @@ can attract a majority; vote your interest.\
 """
 
 
-class BedrockClient:
+class LlmClient:
     def __init__(self) -> None:
-        self.model_id = os.environ.get("BEDROCK_MODEL", DEFAULT_MODEL)
+        self.model_id = (os.environ.get("COWORLD_LLM_MODEL", "anthropic/claude-haiku-4.5")
+                         if os.environ.get("COWORLD_LLM_ENDPOINT")
+                         else os.environ.get("BEDROCK_MODEL", DEFAULT_MODEL))
         region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
         self.region = region
         self._client = None
@@ -55,8 +59,11 @@ class BedrockClient:
             "messages": [{"role": "user", "content": user}],
         }
         try:
-            resp = self._bedrock().invoke_model(modelId=self.model_id, body=json.dumps(body))
-            payload = json.loads(resp["body"].read())
+            if os.environ.get("COWORLD_LLM_ENDPOINT"):
+                payload = complete_native(body, self.model_id)
+            else:
+                resp = self._bedrock().invoke_model(modelId=self.model_id, body=json.dumps(body))
+                payload = json.loads(resp["body"].read())
             text = "".join(p.get("text", "") for p in payload.get("content", []) if p.get("type") == "text")
             self._log_once("ok", f"[bedrock] using the model ({self.model_id})")
             return text.strip() or None
@@ -85,7 +92,7 @@ class HaikuPolicy(ScribePolicy):
     """LLM moves with scribe as the always-legal fallback."""
 
     def __init__(self) -> None:
-        self.client = BedrockClient()
+        self.client = LlmClient()
 
     def _system(self, view: GameView) -> str:
         return SYSTEM.format(seat=view.seat, n=view.num_players)

@@ -9,6 +9,8 @@ changing the game into a different deterministic one.
 
 from __future__ import annotations
 
+from gnomic.llm_transport import complete_native
+
 import asyncio
 import copy
 import json
@@ -254,9 +256,11 @@ class Judge(Protocol):
     ) -> tuple[ActionRuling, dict]: ...
 
 
-class BedrockJudge:
+class LlmJudge:
     def __init__(self, model_id: str | None = None, *, client: Any | None = None) -> None:
-        self.model_id = model_id or os.environ.get("JUDGE_MODEL", DEFAULT_JUDGE_MODEL)
+        self.model_id = (os.environ.get("COWORLD_LLM_MODEL", "anthropic/claude-sonnet-4.6")
+                         if os.environ.get("COWORLD_LLM_ENDPOINT")
+                         else model_id or os.environ.get("JUDGE_MODEL", DEFAULT_JUDGE_MODEL))
         self.max_tokens = int(os.environ.get("GNOMIC_JUDGE_MAX_TOKENS", str(DEFAULT_JUDGE_MAX_TOKENS)))
         if self.max_tokens < 4_096:
             raise ValueError("GNOMIC_JUDGE_MAX_TOKENS must be at least 4096 with extended reasoning")
@@ -283,7 +287,7 @@ class BedrockJudge:
         return self._client
 
     def _invoke(
-        self, messages: list[dict[str, Any]], *, system: str = JUDGE_SYSTEM
+        self, messages: list[dict[str, Any]], *, slot: int, system: str = JUDGE_SYSTEM
     ) -> tuple[str, dict[str, int]]:
         body = {
             "anthropic_version": "bedrock-2023-05-31",
@@ -298,8 +302,11 @@ class BedrockJudge:
             },
             "messages": messages,
         }
-        response = self._bedrock().invoke_model(modelId=self.model_id, body=json.dumps(body))
-        payload = json.loads(response["body"].read())
+        if os.environ.get("COWORLD_LLM_ENDPOINT"):
+            payload = complete_native(body, self.model_id, slot=slot)
+        else:
+            response = self._bedrock().invoke_model(modelId=self.model_id, body=json.dumps(body))
+            payload = json.loads(response["body"].read())
         text = "".join(
             block.get("text", "") for block in payload.get("content", []) if block.get("type") == "text"
         ).strip()
@@ -319,7 +326,7 @@ class BedrockJudge:
         for attempt in range(2):
             started = time.monotonic()
             try:
-                text, usage = await asyncio.to_thread(self._invoke, messages)
+                text, usage = await asyncio.to_thread(self._invoke, messages, slot=turn_record["proposer"])
                 totals["calls"] += 1
                 totals["input_tokens"] += usage["input_tokens"]
                 totals["output_tokens"] += usage["output_tokens"]
@@ -395,7 +402,7 @@ class BedrockJudge:
             started = time.monotonic()
             try:
                 text, usage = await asyncio.to_thread(
-                    self._invoke, messages, system=ACTION_JUDGE_SYSTEM
+                    self._invoke, messages, slot=action_record["player"], system=ACTION_JUDGE_SYSTEM
                 )
                 totals["calls"] += 1
                 totals["input_tokens"] += usage["input_tokens"]

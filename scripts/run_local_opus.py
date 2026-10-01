@@ -1,6 +1,6 @@
 """Run the standard Gnomic variant with Bedrock credentials in game and players.
 
-The stock local Coworld runner intentionally grants ``--use-bedrock`` only to
+The local harness supplies direct AWS credentials to both game and
 player containers. Gnomic's Judge is part of the game container, so this small
 developer harness injects the same temporary AWS session environment into both.
 Credentials remain in process memory and Docker environment; they are never

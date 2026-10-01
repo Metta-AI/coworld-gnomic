@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from ..engine import Board, HOST_CONSTRAINTS, SEAT_COUNT, default_action, default_proposal
-from ..judge import BedrockJudge, DeterministicJudge, Judge, adjudicate, adjudicate_action
+from ..judge import LlmJudge, DeterministicJudge, Judge, adjudicate, adjudicate_action
 from .channel import SeatChannel
 from .config import GameConfig
 
@@ -47,7 +47,7 @@ class Episode:
         self.judge: Judge = (
             DeterministicJudge()
             if config.judge_mode == "deterministic"
-            else BedrockJudge(config.judge_model)
+            else LlmJudge(config.judge_model)
         )
 
     def _next_rid(self) -> int:
