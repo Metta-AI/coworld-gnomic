@@ -208,7 +208,7 @@ class OpusPolicy:
         self.persona = (persona or os.environ.get("GNOMIC_PERSONA", "ivan")).lower()
         if self.persona not in PERSONAS:
             raise ValueError(f"unknown GNOMIC_PERSONA {self.persona!r}")
-        self.model = (os.environ.get("COWORLD_LLM_MODEL", "anthropic/claude-haiku-4.5")
+        self.model = (os.environ.get("COWORLD_LLM_MODEL", "anthropic/claude-opus-4.7")
                          if os.environ.get("COWORLD_LLM_ENDPOINT")
                          else os.environ.get("BEDROCK_MODEL", MODEL))
         self.max_tokens = int(os.environ.get("GNOMIC_PLAYER_MAX_TOKENS", str(DEFAULT_MAX_TOKENS)))
