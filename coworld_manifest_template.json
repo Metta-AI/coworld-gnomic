@@ -100,7 +100,7 @@
         "judge_mode": {
           "type": "string",
           "enum": [
-            "bedrock",
+            "native",
             "deterministic"
           ]
         },
@@ -263,8 +263,8 @@
         "debate_window_s": 600,
         "vote_window_s": 600,
         "judge_window_s": 600,
-        "judge_mode": "bedrock",
-        "judge_model": "us.anthropic.claude-opus-4-7",
+        "judge_mode": "native",
+        "judge_model": "anthropic/claude-opus-4.7",
         "player_connect_timeout_seconds": 180,
         "episode_timeout_seconds": 7200,
         "players": [
@@ -293,7 +293,7 @@
         "vote_window_s": 360,
         "judge_window_s": 30,
         "judge_mode": "deterministic",
-        "judge_model": "us.anthropic.claude-opus-4-7",
+        "judge_model": "anthropic/claude-opus-4.7",
         "player_connect_timeout_seconds": 180,
         "episode_timeout_seconds": 1500,
         "players": [
@@ -320,7 +320,7 @@
       "vote_window_s": 2,
       "judge_window_s": 5,
       "judge_mode": "deterministic",
-      "judge_model": "us.anthropic.claude-opus-4-7",
+      "judge_model": "anthropic/claude-opus-4.7",
       "player_connect_timeout_seconds": 30,
       "episode_timeout_seconds": 240,
       "players": [

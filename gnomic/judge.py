@@ -9,8 +9,6 @@ changing the game into a different deterministic one.
 
 from __future__ import annotations
 
-from gnomic.llm_transport import complete_native
-
 import asyncio
 import copy
 import json
@@ -20,12 +18,12 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from .engine import Board, OperationError, SEAT_COUNT
+from gnomic.llm_transport import Attempt, complete_native
 
-DEFAULT_JUDGE_MODEL = "us.anthropic.claude-opus-4-7"
+from .engine import SEAT_COUNT, Board, OperationError
+
+DEFAULT_JUDGE_MODEL = "anthropic/claude-opus-4.7"
 DEFAULT_JUDGE_MAX_TOKENS = 32_768
-DEFAULT_JUDGE_TASK_BUDGET = 20_000
-TASK_BUDGET_BETA = "task-budgets-2026-03-13"
 
 
 class JudgeError(RuntimeError):
@@ -39,7 +37,7 @@ class RuleOp(BaseModel):
     text: str | None = Field(default=None, max_length=2_000)
 
     @model_validator(mode="after")
-    def required_fields(self) -> "RuleOp":
+    def required_fields(self) -> RuleOp:
         if self.op == "enact" and not self.text:
             raise ValueError("enact requires text")
         if self.op == "amend" and (self.rule_id is None or not self.text):
@@ -60,7 +58,7 @@ class StateOp(BaseModel):
     value: Any = None
 
     @model_validator(mode="after")
-    def seat_matches_scope(self) -> "StateOp":
+    def seat_matches_scope(self) -> StateOp:
         if self.scope == "player" and self.seat is None:
             raise ValueError("player operation requires seat")
         if self.scope == "common" and self.seat is not None:
@@ -78,7 +76,7 @@ class Ruling(BaseModel):
     winner_slots: list[int] = Field(default_factory=list, max_length=SEAT_COUNT)
 
     @model_validator(mode="after")
-    def normalize_winners(self) -> "Ruling":
+    def normalize_winners(self) -> Ruling:
         if len(set(self.winner_slots)) != len(self.winner_slots):
             raise ValueError("winner_slots must be unique")
         if any(seat < 0 or seat >= SEAT_COUNT for seat in self.winner_slots):
@@ -100,7 +98,7 @@ class ActionRuling(BaseModel):
     winner_slots: list[int] = Field(default_factory=list, max_length=SEAT_COUNT)
 
     @model_validator(mode="after")
-    def valid_shape(self) -> "ActionRuling":
+    def valid_shape(self) -> ActionRuling:
         if not self.valid and self.state_ops:
             raise ValueError("an invalid action cannot change state")
         if not self.valid and self.winner_slots:
@@ -200,7 +198,9 @@ Omit seat for common operations. Omit value for delete.
 """
 
 
-def _extract_json(text: str, model: type[Ruling] | type[ActionRuling] = Ruling) -> Ruling | ActionRuling:
+def _extract_json(
+    text: str, model: type[Ruling | ActionRuling] = Ruling
+) -> Ruling | ActionRuling:
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end <= start:
         raise JudgeError("judge response contained no JSON object")
@@ -208,7 +208,9 @@ def _extract_json(text: str, model: type[Ruling] | type[ActionRuling] = Ruling) 
         raw = json.loads(text[start : end + 1])
         if not isinstance(raw, dict):
             raise JudgeError("judge response was not a JSON object")
-        normalized = {key: value for key, value in raw.items() if key in model.model_fields}
+        normalized = {
+            key: value for key, value in raw.items() if key in model.model_fields
+        }
         if model is Ruling and isinstance(normalized.get("rule_ops"), list):
             normalized["rule_ops"] = [
                 {key: value for key, value in op.items() if key in RuleOp.model_fields}
@@ -228,7 +230,9 @@ def _extract_json(text: str, model: type[Ruling] | type[ActionRuling] = Ruling) 
         raise JudgeError(f"judge response failed schema validation: {exc}") from exc
 
 
-def _payload(board: Board, turn_record: dict[str, Any], turn: int, turns_max: int) -> str:
+def _payload(
+    board: Board, turn_record: dict[str, Any], turn: int, turns_max: int
+) -> str:
     compact_board = board.as_dict()
     for rule in compact_board["rules"]:
         rule["history"] = []
@@ -245,7 +249,9 @@ def _payload(board: Board, turn_record: dict[str, Any], turn: int, turns_max: in
 
 
 class Judge(Protocol):
-    async def rule(self, board: Board, turn_record: dict[str, Any], turn: int, turns_max: int) -> tuple[Ruling, dict]: ...
+    async def rule(
+        self, board: Board, turn_record: dict[str, Any], turn: int, turns_max: int
+    ) -> tuple[Ruling, dict]: ...
 
     async def act(
         self,
@@ -257,63 +263,39 @@ class Judge(Protocol):
 
 
 class LlmJudge:
-    def __init__(self, model_id: str | None = None, *, client: Any | None = None) -> None:
-        self.model_id = (os.environ.get("COWORLD_LLM_MODEL", "anthropic/claude-opus-4.7")
-                         if os.environ.get("COWORLD_LLM_ENDPOINT")
-                         else model_id or os.environ.get("JUDGE_MODEL", DEFAULT_JUDGE_MODEL))
-        self.max_tokens = int(os.environ.get("GNOMIC_JUDGE_MAX_TOKENS", str(DEFAULT_JUDGE_MAX_TOKENS)))
+    def __init__(self, model_id: str = DEFAULT_JUDGE_MODEL) -> None:
+        self.model_id = model_id
+        self.max_tokens = int(
+            os.environ.get("GNOMIC_JUDGE_MAX_TOKENS", str(DEFAULT_JUDGE_MAX_TOKENS))
+        )
         if self.max_tokens < 4_096:
-            raise ValueError("GNOMIC_JUDGE_MAX_TOKENS must be at least 4096 with extended reasoning")
-        self.task_budget = int(os.environ.get("GNOMIC_JUDGE_TASK_BUDGET", str(DEFAULT_JUDGE_TASK_BUDGET)))
-        if self.task_budget < 20_000:
-            raise ValueError("GNOMIC_JUDGE_TASK_BUDGET must be at least 20000")
-        self._client = client
-
-    def _bedrock(self) -> Any:
-        if self._client is None:
-            import boto3
-            from botocore.config import Config
-
-            region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION", "us-west-2")
-            self._client = boto3.client(
-                "bedrock-runtime",
-                region_name=region,
-                config=Config(
-                    connect_timeout=10,
-                    read_timeout=270,
-                    retries={"total_max_attempts": 3, "mode": "adaptive"},
-                ),
+            raise ValueError(
+                "GNOMIC_JUDGE_MAX_TOKENS must be at least 4096 with extended reasoning"
             )
-        return self._client
+        self.generations: list[Attempt] = []
 
     def _invoke(
-        self, messages: list[dict[str, Any]], *, slot: int, system: str = JUDGE_SYSTEM
+        self, messages: list[dict[str, Any]], *, system: str = JUDGE_SYSTEM
     ) -> tuple[str, dict[str, int]]:
         body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "anthropic_beta": [TASK_BUDGET_BETA],
             "max_tokens": self.max_tokens,
             "temperature": 1,
+            "top_p": 1,
             "system": system,
             "thinking": {"type": "adaptive"},
-            "output_config": {
-                "effort": "high",
-                "task_budget": {"type": "tokens", "total": self.task_budget},
-            },
+            "output_config": {"effort": "high"},
             "messages": messages,
         }
-        if os.environ.get("COWORLD_LLM_ENDPOINT"):
-            payload = complete_native(body, self.model_id, slot=slot)
-        else:
-            response = self._bedrock().invoke_model(modelId=self.model_id, body=json.dumps(body))
-            payload = json.loads(response["body"].read())
-        text = "".join(
-            block.get("text", "") for block in payload.get("content", []) if block.get("type") == "text"
-        ).strip()
-        usage = payload.get("usage") or {}
-        return text, {
-            "input_tokens": int(usage.get("input_tokens", 0)),
-            "output_tokens": int(usage.get("output_tokens", 0)),
+        payload = asyncio.run(complete_native(
+            body,
+            self.model_id,
+            purpose="environment",
+            timeout=120,
+            generations=self.generations,
+        ))
+        return payload.text, {
+            "input_tokens": payload.usage.input_tokens,
+            "output_tokens": payload.usage.output_tokens,
         }
 
     async def rule(
@@ -326,7 +308,9 @@ class LlmJudge:
         for attempt in range(2):
             started = time.monotonic()
             try:
-                text, usage = await asyncio.to_thread(self._invoke, messages, slot=turn_record["proposer"])
+                text, usage = await asyncio.to_thread(
+                    self._invoke, messages
+                )
                 totals["calls"] += 1
                 totals["input_tokens"] += usage["input_tokens"]
                 totals["output_tokens"] += usage["output_tokens"]
@@ -334,12 +318,18 @@ class LlmJudge:
                 parsed = _extract_json(text)
                 assert isinstance(parsed, Ruling)
                 ruling = parsed
-                if not turn_record["passed_vote"] and (ruling.adopted or ruling.rule_ops):
-                    raise JudgeError("a failed vote cannot be adopted or mutate the rulebook")
+                if not turn_record["passed_vote"] and (
+                    ruling.adopted or ruling.rule_ops
+                ):
+                    raise JudgeError(
+                        "a failed vote cannot be adopted or mutate the rulebook"
+                    )
                 if ruling.adopted and not ruling.valid:
                     raise JudgeError("an invalid proposal cannot be adopted")
                 if not ruling.adopted and ruling.rule_ops:
-                    raise JudgeError("a proposal that was not adopted cannot mutate the rulebook")
+                    raise JudgeError(
+                        "a proposal that was not adopted cannot mutate the rulebook"
+                    )
                 if ruling.adopted:
                     expected_rule_op = board.proposal_rule_op(turn_record["proposal"])
                     if ruling.rule_dicts() != [expected_rule_op]:
@@ -352,14 +342,19 @@ class LlmJudge:
                     state=copy.deepcopy(board.state),
                     next_rule_id=board.next_rule_id,
                 )
-                candidate.apply_ops_atomic(ruling.rule_dicts(), ruling.state_dicts(), turn=turn)
+                candidate.apply_ops_atomic(
+                    ruling.rule_dicts(), ruling.state_dicts(), turn=turn
+                )
                 return ruling, totals
             except (JudgeError, OperationError) as exc:
                 last_error = exc
                 if attempt == 0:
                     messages.extend(
                         [
-                            {"role": "assistant", "content": text if "text" in locals() else "{}"},
+                            {
+                                "role": "assistant",
+                                "content": text if "text" in locals() else "{}",
+                            },
                             {
                                 "role": "user",
                                 "content": f"Your JSON was rejected: {exc}. Return one corrected JSON object only.",
@@ -373,7 +368,9 @@ class LlmJudge:
                 if attempt == 0:
                     await asyncio.sleep(8.0)
                     continue
-        raise JudgeError(f"Opus judge failed after two attempts: {type(last_error).__name__}: {last_error}")
+        raise JudgeError(
+            f"Opus judge failed after two attempts: {type(last_error).__name__}: {last_error}"
+        )
 
     async def act(
         self,
@@ -402,7 +399,9 @@ class LlmJudge:
             started = time.monotonic()
             try:
                 text, usage = await asyncio.to_thread(
-                    self._invoke, messages, slot=action_record["player"], system=ACTION_JUDGE_SYSTEM
+                    self._invoke,
+                    messages,
+                    system=ACTION_JUDGE_SYSTEM,
                 )
                 totals["calls"] += 1
                 totals["input_tokens"] += usage["input_tokens"]
@@ -422,7 +421,10 @@ class LlmJudge:
                 if attempt == 0:
                     messages.extend(
                         [
-                            {"role": "assistant", "content": text if "text" in locals() else "{}"},
+                            {
+                                "role": "assistant",
+                                "content": text if "text" in locals() else "{}",
+                            },
                             {
                                 "role": "user",
                                 "content": f"Your JSON was rejected: {exc}. Return one corrected JSON object only.",
@@ -470,12 +472,22 @@ class DeterministicJudge:
         if not isinstance(entropy, int) or isinstance(entropy, bool):
             entropy = 0
         sides = board.state.common.get("fate_die_sides", 6)
-        if not isinstance(sides, int) or isinstance(sides, bool) or not 1 <= sides <= 1_000:
+        if (
+            not isinstance(sides, int)
+            or isinstance(sides, bool)
+            or not 1 <= sides <= 1_000
+        ):
             sides = 6
         fate_roll = entropy % sides + 1
         recipient_mode = board.state.common.get("fate_recipient", "random")
-        random_seat = host_random.get("random_seat", 0) if isinstance(host_random, dict) else 0
-        if not isinstance(random_seat, int) or isinstance(random_seat, bool) or not 0 <= random_seat < SEAT_COUNT:
+        random_seat = (
+            host_random.get("random_seat", 0) if isinstance(host_random, dict) else 0
+        )
+        if (
+            not isinstance(random_seat, int)
+            or isinstance(random_seat, bool)
+            or not 0 <= random_seat < SEAT_COUNT
+        ):
             random_seat = 0
         fate_recipient = proposer if recipient_mode == "proposer" else random_seat
         state_ops.append(
@@ -489,7 +501,12 @@ class DeterministicJudge:
         )
         projected = board.state.game_points()
         for op in state_ops:
-            if op.scope == "player" and op.key == "points" and op.op == "increment" and op.seat is not None:
+            if (
+                op.scope == "player"
+                and op.key == "points"
+                and op.op == "increment"
+                and op.seat is not None
+            ):
                 projected[op.seat] += int(op.value)
         threshold = board.state.victory_points()
         winners = (
@@ -509,7 +526,12 @@ class DeterministicJudge:
             state_ops=state_ops,
             winner_slots=winners,
         )
-        return ruling, {"calls": 0, "input_tokens": 0, "output_tokens": 0, "latency_ms": 0}
+        return ruling, {
+            "calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "latency_ms": 0,
+        }
 
     async def act(
         self,
@@ -530,7 +552,12 @@ class DeterministicJudge:
             state_ops=[],
             winner_slots=[],
         )
-        return ruling, {"calls": 0, "input_tokens": 0, "output_tokens": 0, "latency_ms": 0}
+        return ruling, {
+            "calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "latency_ms": 0,
+        }
 
 
 async def adjudicate(
@@ -549,7 +576,9 @@ async def adjudicate(
     if not winners:
         winners = board.point_victors(turn=turn)
     return {
-        "source": "deterministic" if isinstance(judge, DeterministicJudge) else "opus-4.7",
+        "source": "deterministic"
+        if isinstance(judge, DeterministicJudge)
+        else "opus-4.7",
         "valid": ruling.valid,
         "adopted": ruling.adopted,
         "summary": ruling.summary,
@@ -568,21 +597,33 @@ async def adjudicate_action(
     turns_max: int,
     judge: Judge,
 ) -> dict[str, Any]:
-    if str(action_record.get("text", "")).strip().lower() in {"", "pass", "i pass", "no action"}:
+    if str(action_record.get("text", "")).strip().lower() in {
+        "",
+        "pass",
+        "i pass",
+        "no action",
+    }:
         return {
             "source": "host",
             "valid": True,
             "summary": "The player passed; no public state changed.",
             "state_ops": [],
             "winner_slots": [],
-            "usage": {"calls": 0, "input_tokens": 0, "output_tokens": 0, "latency_ms": 0},
+            "usage": {
+                "calls": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "latency_ms": 0,
+            },
         }
     ruling, usage = await judge.act(board, action_record, turn, turns_max)
     state_ops = ruling.state_dicts()
     if ruling.valid:
         board.apply_ops_atomic([], state_ops, turn=turn)
     return {
-        "source": "deterministic" if isinstance(judge, DeterministicJudge) else "opus-4.7",
+        "source": "deterministic"
+        if isinstance(judge, DeterministicJudge)
+        else "opus-4.7",
         "valid": ruling.valid,
         "summary": ruling.summary,
         "state_ops": state_ops,

@@ -27,15 +27,17 @@ class GameConfig(BaseModel):
     vote_window_s: float = Field(default=600.0, ge=0.05, le=600)
     judge_window_s: float = Field(default=600.0, ge=1, le=600)
     introduce_window_s: float = Field(default=15.0, ge=0.05, le=60)
-    judge_mode: Literal["bedrock", "deterministic"] = "bedrock"
-    judge_model: str = "us.anthropic.claude-opus-4-7"
+    judge_mode: Literal["native", "deterministic"] = "native"
+    judge_model: str = "anthropic/claude-opus-4.7"
     seed: int | None = None
     player_connect_timeout_seconds: float = Field(default=180.0, ge=0, le=600)
     episode_timeout_seconds: float = Field(default=5_400.0, ge=60, le=7_200)
 
     @model_validator(mode="after")
-    def require_unique_tokens(self) -> "GameConfig":
-        if len(set(self.tokens)) != SEAT_COUNT or any(not token for token in self.tokens):
+    def require_unique_tokens(self) -> GameConfig:
+        if len(set(self.tokens)) != SEAT_COUNT or any(
+            not token for token in self.tokens
+        ):
             raise ValueError("tokens must contain three distinct non-empty values")
         return self
 

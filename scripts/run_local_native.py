@@ -1,50 +1,28 @@
-"""Run the standard Gnomic variant with Bedrock credentials in game and players.
+"""Run the standard variant through an explicitly configured local native sidecar.
 
-The local harness supplies direct AWS credentials to both game and
-player containers. Gnomic's Judge is part of the game container, so this small
-developer harness injects the same temporary AWS session environment into both.
-Credentials remain in process memory and Docker environment; they are never
-written to the episode artifacts or printed.
+The Elder keeps its manifest model. Learner model overrides apply only to players.
+No AWS credentials or provider fallback are installed into game or player containers.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
-import subprocess
+import os
 from pathlib import Path
 
 from coworld.certifier import build_manifest_episode_job_spec, load_coworld_package
 from coworld.runner.runner import EpisodeArtifacts, run_coworld_episode
 
 
-def bedrock_env(profile: str, region: str) -> dict[str, str]:
-    result = subprocess.run(
-        ["aws", "configure", "export-credentials", "--format", "process", "--profile", profile],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    exported = json.loads(result.stdout)
-    env = {
-        "AWS_ACCESS_KEY_ID": exported["AccessKeyId"],
-        "AWS_SECRET_ACCESS_KEY": exported["SecretAccessKey"],
-        "AWS_REGION": region,
-        "AWS_DEFAULT_REGION": region,
-        "BEDROCK_MODEL": "us.anthropic.claude-opus-4-7",
-        "USE_BEDROCK": "true",
-    }
-    if exported.get("SessionToken"):
-        env["AWS_SESSION_TOKEN"] = exported["SessionToken"]
-    return env
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, default=Path("coworld_manifest.json"))
     parser.add_argument("--output", type=Path, default=Path("artifacts/local-opus"))
-    parser.add_argument("--profile", default="softmax")
-    parser.add_argument("--region", default="us-west-2")
+    parser.add_argument(
+        "--endpoint",
+        default=os.environ.get("COWORLD_LLM_ENDPOINT"),
+        required="COWORLD_LLM_ENDPOINT" not in os.environ,
+    )
     parser.add_argument(
         "--turns",
         type=int,
@@ -66,7 +44,7 @@ def main() -> None:
     if args.turns is not None and not 1 <= args.turns <= 45:
         parser.error("--turns must be between 1 and 45")
 
-    credentials = bedrock_env(args.profile, args.region)
+    native_env = {"COWORLD_LLM_ENDPOINT": args.endpoint}
     package = load_coworld_package(args.manifest)
     job = build_manifest_episode_job_spec(
         package,
@@ -82,7 +60,7 @@ def main() -> None:
     manifest = job.manifest.model_copy(deep=True)
     runnable = manifest.game.runnable.model_copy(
         deep=True,
-        update={"env": {**manifest.game.runnable.env, **credentials}},
+        update={"env": {**manifest.game.runnable.env, **native_env}},
     )
     manifest.game = manifest.game.model_copy(deep=True, update={"runnable": runnable})
     job = job.model_copy(deep=True, update={"manifest": manifest})
@@ -94,7 +72,18 @@ def main() -> None:
         timeout_seconds=6_600,
         verify_replay=True,
         container_prefix="gnomic-opus",
-        secret_env=credentials,
+        secret_env={
+            **native_env,
+            **{
+                key: os.environ[key]
+                for key in (
+                    "COWORLD_LLM_MODEL",
+                    "COWORLD_LLM_TEMPERATURE",
+                    "COWORLD_LLM_TOP_P",
+                )
+                if key in os.environ
+            },
+        },
     )
     print(f"Results: {artifacts.results_path}")
     print(f"Replay: {artifacts.replay_path}")

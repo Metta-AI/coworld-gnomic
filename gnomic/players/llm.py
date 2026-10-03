@@ -8,8 +8,6 @@ blindly reused as the final vote.
 
 from __future__ import annotations
 
-from gnomic.llm_transport import complete_native
-
 import asyncio
 import json
 import os
@@ -19,11 +17,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from gnomic.llm_transport import complete_native
+
 from .client import main
 
-MODEL = "us.anthropic.claude-opus-4-7"
+MODEL = "anthropic/claude-opus-4.7"
 DEFAULT_MAX_TOKENS = 32_768
-DEFAULT_TASK_BUDGET = 20_000
 OUTCOME = Literal["sole_win", "co_win", "continues", "loss", "uncertain"]
 
 _DECLARED_VOTE_RE = re.compile(
@@ -65,7 +64,7 @@ class ProposalOutput(BaseModel):
     rationale: str = Field(default="", max_length=2_000)
 
     @model_validator(mode="after")
-    def fields_match_kind(self) -> "ProposalOutput":
+    def fields_match_kind(self) -> ProposalOutput:
         if self.kind in {"enact", "amend"} and not self.text:
             raise ValueError(f"{self.kind} requires text")
         if self.kind in {"amend", "repeal", "transmute"} and self.rule_id is None:
@@ -84,11 +83,15 @@ class DebateOutput(BaseModel):
     vote_intent: Literal["aye", "nay"]
 
     @model_validator(mode="after")
-    def decision_is_coherent(self) -> "DebateOutput":
+    def decision_is_coherent(self) -> DebateOutput:
         declarations = _DECLARED_VOTE_RE.findall(self.text)
         if declarations and declarations[-1].lower() != self.vote_intent:
             raise ValueError("public statement explicitly declares the opposite vote")
-        if self.game_ends_if_adopted and self.my_outcome_if_adopted == "loss" and self.vote_intent == "aye":
+        if (
+            self.game_ends_if_adopted
+            and self.my_outcome_if_adopted == "loss"
+            and self.vote_intent == "aye"
+        ):
             raise ValueError("cannot vote AYE for an immediate own loss")
         return self
 
@@ -104,8 +107,12 @@ class VoteOutput(BaseModel):
     reason: str = Field(min_length=1, max_length=1_000)
 
     @model_validator(mode="after")
-    def reject_immediate_own_loss(self) -> "VoteOutput":
-        if self.game_ends_if_adopted and self.my_outcome_if_adopted == "loss" and self.vote == "aye":
+    def reject_immediate_own_loss(self) -> VoteOutput:
+        if (
+            self.game_ends_if_adopted
+            and self.my_outcome_if_adopted == "loss"
+            and self.vote == "aye"
+        ):
             raise ValueError("cannot vote AYE for an immediate own loss")
         return self
 
@@ -122,7 +129,9 @@ def _clip_public(text: str, limit: int) -> str:
     return (prefix[:word_end] if word_end >= limit // 2 else prefix).rstrip() + "…"
 
 
-def normalize_model_payload(data: dict[str, Any], model: type[BaseModel]) -> dict[str, Any]:
+def normalize_model_payload(
+    data: dict[str, Any], model: type[BaseModel]
+) -> dict[str, Any]:
     """Map common harmless label synonyms before strict schema validation."""
     normalized = dict(data)
     normalized.pop("default", None)
@@ -204,23 +213,23 @@ def normalize_model_payload(data: dict[str, Any], model: type[BaseModel]) -> dic
 
 
 class OpusPolicy:
-    def __init__(self, persona: str | None = None, *, client: Any | None = None) -> None:
+    def __init__(self, persona: str | None = None) -> None:
         self.persona = (persona or os.environ.get("GNOMIC_PERSONA", "ivan")).lower()
         if self.persona not in PERSONAS:
             raise ValueError(f"unknown GNOMIC_PERSONA {self.persona!r}")
-        self.model = (os.environ.get("COWORLD_LLM_MODEL", "anthropic/claude-opus-4.7")
-                         if os.environ.get("COWORLD_LLM_ENDPOINT")
-                         else os.environ.get("BEDROCK_MODEL", MODEL))
-        self.max_tokens = int(os.environ.get("GNOMIC_PLAYER_MAX_TOKENS", str(DEFAULT_MAX_TOKENS)))
+        self.model = os.environ.get("COWORLD_LLM_MODEL", MODEL)
+        self.max_tokens = int(
+            os.environ.get("GNOMIC_PLAYER_MAX_TOKENS", str(DEFAULT_MAX_TOKENS))
+        )
         if self.max_tokens < 4_096:
-            raise ValueError("GNOMIC_PLAYER_MAX_TOKENS must be at least 4096 with extended reasoning")
-        self.reasoning_effort = os.environ.get("GNOMIC_REASONING_EFFORT", "high").lower()
+            raise ValueError(
+                "GNOMIC_PLAYER_MAX_TOKENS must be at least 4096 with extended reasoning"
+            )
+        self.reasoning_effort = os.environ.get(
+            "GNOMIC_REASONING_EFFORT", "high"
+        ).lower()
         if self.reasoning_effort not in {"low", "medium", "high"}:
             raise ValueError("GNOMIC_REASONING_EFFORT must be low, medium, or high")
-        self.task_budget = int(os.environ.get("GNOMIC_TASK_BUDGET", str(DEFAULT_TASK_BUDGET)))
-        if self.task_budget < 20_000:
-            raise ValueError("GNOMIC_TASK_BUDGET must be at least 20000")
-        self._client = client
         self.seat = 0
         self.proposer = 0
         self.turns_max = 45
@@ -231,55 +240,30 @@ class OpusPolicy:
         self.vote_intents: dict[int, str] = {}
         self.usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
 
-    def _bedrock(self) -> Any:
-        if self._client is None:
-            import boto3
-            from botocore.config import Config
-
-            region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION", "us-west-2")
-            self._client = boto3.client(
-                "bedrock-runtime",
-                region_name=region,
-                config=Config(
-                    connect_timeout=10,
-                    read_timeout=570,
-                    retries={"total_max_attempts": 2, "mode": "adaptive"},
-                ),
-            )
-        return self._client
-
     def _invoke(self, system: str, prompt: str) -> str:
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "anthropic_beta": ["task-budgets-2026-03-13"],
-            "max_tokens": self.max_tokens,
-            "temperature": 1,
-            "system": system,
-            "thinking": {"type": "adaptive"},
-            "output_config": {
-                "effort": self.reasoning_effort,
-                "task_budget": {"type": "tokens", "total": self.task_budget},
+        payload = asyncio.run(complete_native(
+            {
+                "max_tokens": self.max_tokens,
+                "temperature": 1,
+                "system": system,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": self.reasoning_effort},
+                "messages": [{"role": "user", "content": prompt}],
             },
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        if os.environ.get("COWORLD_LLM_ENDPOINT"):
-            payload = complete_native(body, self.model)
-        else:
-            response = self._bedrock().invoke_model(modelId=self.model, body=json.dumps(body))
-            payload = json.loads(response["body"].read())
-        usage = payload.get("usage") or {}
+            self.model,
+            purpose="learner",
+            slot=self.seat,
+            timeout=120,
+        ))
         self.usage["calls"] += 1
-        self.usage["input_tokens"] += int(usage.get("input_tokens", 0))
-        self.usage["output_tokens"] += int(usage.get("output_tokens", 0))
-        text = "".join(
-            block.get("text", "") for block in payload.get("content", []) if block.get("type") == "text"
-        )
-        if not text:
+        self.usage["input_tokens"] += payload.usage.input_tokens
+        self.usage["output_tokens"] += payload.usage.output_tokens
+        if not payload.text:
             raise ValueError(
                 "model returned no text content "
-                f"(stop_reason={payload.get('stop_reason')!r}, output_tokens={usage.get('output_tokens')!r})"
+                f"(stop_reason={payload.stop_reason!r}, output_tokens={payload.usage.output_tokens!r})"
             )
-        return text
+        return payload.text
 
     @staticmethod
     def _json(text: str) -> dict[str, Any]:
@@ -291,13 +275,17 @@ class OpusPolicy:
             raise ValueError("response was not an object")
         return value
 
-    async def _complete(self, system: str, prompt: str, model: type[BaseModel]) -> BaseModel:
+    async def _complete(
+        self, system: str, prompt: str, model: type[BaseModel]
+    ) -> BaseModel:
         last: Exception | None = None
         repair = ""
         for attempt in range(2):
             try:
                 text = await asyncio.to_thread(self._invoke, system, prompt + repair)
-                return model.model_validate(normalize_model_payload(self._json(text), model))
+                return model.model_validate(
+                    normalize_model_payload(self._json(text), model)
+                )
             except (ValueError, json.JSONDecodeError, ValidationError) as exc:
                 last = exc
                 if "model returned no text content" in str(exc):
@@ -337,11 +325,13 @@ An action is natural language interpreted under rules already active at the star
 that turn. It may change bounded public state but cannot change rules. If rejected you
 receive one repair attempt; use the rejection reason literally. Passing is always legal.
 Immutable host constraints:
-{constraints or '- Use only the protocol and bounded public state provided by the host.'}
+{constraints or "- Use only the protocol and bounded public state provided by the host."}
 Never propose a mechanic that contradicts those constraints or needs an unsupported
 phase. In particular, debates are parallel and have no mutable debate order."""
 
-    def _strategic_context(self, turn: int, proposer: int | None = None) -> dict[str, Any]:
+    def _strategic_context(
+        self, turn: int, proposer: int | None = None
+    ) -> dict[str, Any]:
         state = self.board.get("state") if isinstance(self.board, dict) else {}
         state = state if isinstance(state, dict) else {}
         common = state.get("common") if isinstance(state.get("common"), dict) else {}
@@ -363,7 +353,11 @@ phase. In particular, debates are parallel and have no mutable debate order."""
         ):
             order = [0, 1, 2]
         cursor = common.get("proposer_cursor")
-        if not isinstance(cursor, int) or isinstance(cursor, bool) or not 0 <= cursor < len(order):
+        if (
+            not isinstance(cursor, int)
+            or isinstance(cursor, bool)
+            or not 0 <= cursor < len(order)
+        ):
             cursor = turn % len(order)
         current_proposer = self.proposer if proposer is None else proposer
         remaining = [{"turn": turn, "proposer": current_proposer}]
@@ -383,7 +377,9 @@ phase. In particular, debates are parallel and have no mutable debate order."""
             "victory_points": common.get("victory_points", 100),
             "victory_check_every": common.get("victory_check_every", 3),
             "points_per_adopted_proposal": common.get("points_per_adopted_proposal", 3),
-            "points_per_rejected_proposal": common.get("points_per_rejected_proposal", -1),
+            "points_per_rejected_proposal": common.get(
+                "points_per_rejected_proposal", -1
+            ),
             "fate_die_sides": common.get("fate_die_sides", 6),
             "fate_recipient": common.get("fate_recipient", "random"),
             "muse": common.get("muse", []),
@@ -393,7 +389,9 @@ phase. In particular, debates are parallel and have no mutable debate order."""
         kind = message.get("type")
         compact: dict[str, Any] | None = None
         if kind == "action_made":
-            action = message.get("action") if isinstance(message.get("action"), dict) else {}
+            action = (
+                message.get("action") if isinstance(message.get("action"), dict) else {}
+            )
             compact = {
                 "type": kind,
                 "turn": message.get("turn"),
@@ -404,10 +402,22 @@ phase. In particular, debates are parallel and have no mutable debate order."""
         elif kind == "action_ruling":
             compact = {
                 key: message.get(key)
-                for key in ("type", "turn", "player", "attempt", "valid", "summary", "state_ops")
+                for key in (
+                    "type",
+                    "turn",
+                    "player",
+                    "attempt",
+                    "valid",
+                    "summary",
+                    "state_ops",
+                )
             }
         elif kind == "proposal_made":
-            proposal = message.get("proposal") if isinstance(message.get("proposal"), dict) else {}
+            proposal = (
+                message.get("proposal")
+                if isinstance(message.get("proposal"), dict)
+                else {}
+            )
             compact = {
                 "type": kind,
                 "turn": message.get("turn"),
@@ -418,13 +428,19 @@ phase. In particular, debates are parallel and have no mutable debate order."""
                         "kind": proposal.get("kind"),
                         "rule_id": proposal.get("rule_id"),
                         "text": _clip_public(str(proposal.get("text", "")), 1_000),
-                        "rationale": _clip_public(str(proposal.get("rationale", "")), 600),
+                        "rationale": _clip_public(
+                            str(proposal.get("rationale", "")), 600
+                        ),
                     }.items()
                     if value not in {None, ""}
                 },
             }
         elif kind == "debate_made":
-            statements = message.get("statements") if isinstance(message.get("statements"), list) else []
+            statements = (
+                message.get("statements")
+                if isinstance(message.get("statements"), list)
+                else []
+            )
             compact = {
                 "type": kind,
                 "turn": message.get("turn"),
@@ -439,7 +455,9 @@ phase. In particular, debates are parallel and have no mutable debate order."""
                 ],
             }
         elif kind == "vote_reveal":
-            votes = message.get("votes") if isinstance(message.get("votes"), list) else []
+            votes = (
+                message.get("votes") if isinstance(message.get("votes"), list) else []
+            )
             compact = {
                 "type": kind,
                 "turn": message.get("turn"),
@@ -455,8 +473,12 @@ phase. In particular, debates are parallel and have no mutable debate order."""
                 ],
             }
         elif kind == "judge_ruling":
-            state = message.get("state") if isinstance(message.get("state"), dict) else {}
-            players = state.get("players") if isinstance(state.get("players"), list) else []
+            state = (
+                message.get("state") if isinstance(message.get("state"), dict) else {}
+            )
+            players = (
+                state.get("players") if isinstance(state.get("players"), list) else []
+            )
             compact = {
                 "type": kind,
                 "turn": message.get("turn"),
@@ -477,8 +499,14 @@ phase. In particular, debates are parallel and have no mutable debate order."""
             if not isinstance(record, dict):
                 continue
             turn = record.get("turn")
-            action = record.get("action") if isinstance(record.get("action"), dict) else {}
-            attempts = action.get("attempts") if isinstance(action.get("attempts"), list) else []
+            action = (
+                record.get("action") if isinstance(record.get("action"), dict) else {}
+            )
+            attempts = (
+                action.get("attempts")
+                if isinstance(action.get("attempts"), list)
+                else []
+            )
             if attempts:
                 final_attempt = attempts[-1] if isinstance(attempts[-1], dict) else {}
                 self._remember(
@@ -531,7 +559,9 @@ phase. In particular, debates are parallel and have no mutable debate order."""
         if kind == "game_start":
             self.seat = int(message["you"]["seat"])
             self.host_constraints = [
-                str(item) for item in message.get("host_constraints", []) if isinstance(item, str)
+                str(item)
+                for item in message.get("host_constraints", [])
+                if isinstance(item, str)
             ]
             limits = message.get("session", {}).get("limits", {})
             if isinstance(limits, dict):
@@ -546,7 +576,10 @@ phase. In particular, debates are parallel and have no mutable debate order."""
             return None
         if kind in {"action_ruling", "judge_ruling"}:
             if kind == "action_ruling":
-                self.board = {"rules": self.board.get("rules", []), "state": message["state"]}
+                self.board = {
+                    "rules": self.board.get("rules", []),
+                    "state": message["state"],
+                }
             else:
                 self.board = {"rules": message["rules"], "state": message["state"]}
             self._remember(message)
@@ -573,10 +606,16 @@ phase. In particular, debates are parallel and have no mutable debate order."""
                     ),
                     "strategic_context": self._strategic_context(turn, self.seat),
                     "board": self.board,
-                    "original_action": message.get("original_action") if is_repair else None,
-                    "judge_rejection_reason": message.get("rejection_reason") if is_repair else None,
+                    "original_action": message.get("original_action")
+                    if is_repair
+                    else None,
+                    "judge_rejection_reason": message.get("rejection_reason")
+                    if is_repair
+                    else None,
                     "recent_public_history": self.history[-16:],
-                    "format": {"action": "one concise first-person natural-language move, or pass"},
+                    "format": {
+                        "action": "one concise first-person natural-language move, or pass"
+                    },
                 },
                 ensure_ascii=False,
             )
@@ -584,7 +623,11 @@ phase. In particular, debates are parallel and have no mutable debate order."""
                 result = await self._complete(self._system(), prompt, ActionOutput)
                 return {"rid": message["rid"], "action": result.action}
             except Exception as exc:
-                print(f"[gnomic-player] action fallback: {exc}", file=sys.stderr, flush=True)
+                print(
+                    f"[gnomic-player] action fallback: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 return {"rid": message["rid"], "action": "pass"}
         if kind == "proposal_request":
             turn = int(message["turn"])
@@ -616,7 +659,11 @@ phase. In particular, debates are parallel and have no mutable debate order."""
                     raise ValueError("invalid proposal kind")
                 return {"rid": message["rid"], "proposal": data}
             except Exception as exc:
-                print(f"[gnomic-player] proposal fallback: {exc}", file=sys.stderr, flush=True)
+                print(
+                    f"[gnomic-player] proposal fallback: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 return {
                     "rid": message["rid"],
                     "proposal": {
@@ -662,18 +709,34 @@ phase. In particular, debates are parallel and have no mutable debate order."""
                 if intent not in {"aye", "nay"}:
                     raise ValueError("invalid vote intent")
                 self.vote_intents[int(message["turn"])] = intent
-                return {"rid": message["rid"], "text": data["text"], "vote_intent": intent}
+                return {
+                    "rid": message["rid"],
+                    "text": data["text"],
+                    "vote_intent": intent,
+                }
             except Exception as exc:
-                print(f"[gnomic-player] debate fallback: {exc}", file=sys.stderr, flush=True)
+                print(
+                    f"[gnomic-player] debate fallback: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 self.vote_intents[int(message["turn"])] = "nay"
-                return {"rid": message["rid"], "text": "I cannot support this proposal confidently.", "vote_intent": "nay"}
+                return {
+                    "rid": message["rid"],
+                    "text": "I cannot support this proposal confidently.",
+                    "vote_intent": "nay",
+                }
         if kind == "vote_request":
             turn = int(message["turn"])
             self.current_votes_required = int(
                 message.get("votes_required", self.current_votes_required)
             )
             if self.seat == self.proposer:
-                return {"rid": message["rid"], "vote": "aye", "reason": "Proposer support."}
+                return {
+                    "rid": message["rid"],
+                    "vote": "aye",
+                    "reason": "Proposer support.",
+                }
             prompt = json.dumps(
                 {
                     "task": (
@@ -702,16 +765,26 @@ phase. In particular, debates are parallel and have no mutable debate order."""
             try:
                 result = await self._complete(self._system(), prompt, VoteOutput)
                 data = result.model_dump()
-                return {"rid": message["rid"], "vote": data["vote"], "reason": data["reason"]}
+                return {
+                    "rid": message["rid"],
+                    "vote": data["vote"],
+                    "reason": data["reason"],
+                }
             except Exception as exc:
-                print(f"[gnomic-player] vote fallback: {exc}", file=sys.stderr, flush=True)
+                print(
+                    f"[gnomic-player] vote fallback: {exc}", file=sys.stderr, flush=True
+                )
                 return {
                     "rid": message["rid"],
                     "vote": "nay",
                     "reason": "Could not verify that adoption preserves my path to victory.",
                 }
         if kind == "final":
-            print(f"[gnomic-player] usage={json.dumps(self.usage)}", file=sys.stderr, flush=True)
+            print(
+                f"[gnomic-player] usage={json.dumps(self.usage)}",
+                file=sys.stderr,
+                flush=True,
+            )
         return None
 
 

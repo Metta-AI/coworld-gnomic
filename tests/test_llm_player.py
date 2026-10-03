@@ -1,31 +1,44 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 
 import pytest
 
-from gnomic.players.llm import ActionOutput, DebateOutput, OpusPolicy, ProposalOutput, VoteOutput, normalize_model_payload
+from gnomic.players.llm import (
+    ActionOutput,
+    DebateOutput,
+    OpusPolicy,
+    ProposalOutput,
+    VoteOutput,
+    normalize_model_payload,
+)
 
 
-class FakeBedrock:
+class FakeNative:
     def __init__(self, text: str = '{"kind":"enact"}') -> None:
         self.body: dict | None = None
         self.text = text
 
-    def invoke_model(self, *, modelId: str, body: str):
-        self.body = json.loads(body)
-        payload = {
-            "content": [{"type": "text", "text": self.text}],
-            "usage": {"input_tokens": 3, "output_tokens": 4},
-        }
-        return {"body": io.BytesIO(json.dumps(payload).encode())}
+    async def complete(self, body, model, **kwargs):
+        from gnomic.llm_transport import Response
+
+        self.body = body
+        return Response.model_validate(
+            {
+                "model": model,
+                "content": [{"type": "text", "text": self.text}],
+                "usage": {"input_tokens": 3, "output_tokens": 4},
+            }
+        )
 
 
-def test_opus_player_request_uses_adaptive_high_with_task_budget() -> None:
-    fake = FakeBedrock()
-    policy = OpusPolicy("ivan", client=fake)
+def test_opus_player_request_uses_adaptive_high_with_native_reasoning(
+    monkeypatch,
+) -> None:
+    fake = FakeNative()
+    monkeypatch.setattr("gnomic.players.llm.complete_native", fake.complete)
+    policy = OpusPolicy("ivan")
     assert policy._invoke("system", "prompt") == '{"kind":"enact"}'
     assert fake.body is not None
     assert fake.body["max_tokens"] == 32768
@@ -33,9 +46,7 @@ def test_opus_player_request_uses_adaptive_high_with_task_budget() -> None:
     assert fake.body["thinking"] == {"type": "adaptive"}
     assert fake.body["output_config"] == {
         "effort": "high",
-        "task_budget": {"type": "tokens", "total": 20000},
     }
-    assert fake.body["anthropic_beta"] == ["task-budgets-2026-03-13"]
     assert policy.usage == {"calls": 1, "input_tokens": 3, "output_tokens": 4}
 
 
@@ -50,11 +61,17 @@ def test_common_json_key_synonyms_normalize_before_strict_validation() -> None:
     action = normalize_model_payload({"text": "I ring the bell."}, ActionOutput)
     assert ActionOutput.model_validate(action).action == "I ring the bell."
     debate = normalize_model_payload(
-        {**context, "public_statement": "This helps us.", "vote_intent": "aye"}, DebateOutput
+        {**context, "public_statement": "This helps us.", "vote_intent": "aye"},
+        DebateOutput,
     )
     assert DebateOutput.model_validate(debate).text == "This helps us."
     invented = normalize_model_payload(
-        {**context, "case_against": "This helps only the proposer.", "vote_intent": "nay"}, DebateOutput
+        {
+            **context,
+            "case_against": "This helps only the proposer.",
+            "vote_intent": "nay",
+        },
+        DebateOutput,
     )
     assert DebateOutput.model_validate(invented).text == "This helps only the proposer."
     proposal = normalize_model_payload(
@@ -116,8 +133,10 @@ def test_vote_rejects_immediate_own_loss() -> None:
 
 
 @pytest.mark.asyncio
-async def test_game_start_carries_host_constraints_into_strategic_system_prompt() -> None:
-    policy = OpusPolicy("ivan", client=FakeBedrock())
+async def test_game_start_carries_host_constraints_into_strategic_system_prompt() -> (
+    None
+):
+    policy = OpusPolicy("ivan")
     await policy.respond(
         {
             "type": "game_start",
@@ -138,8 +157,10 @@ async def test_game_start_carries_host_constraints_into_strategic_system_prompt(
 
 
 @pytest.mark.asyncio
-async def test_final_vote_reasons_fresh_instead_of_reusing_debate_intent() -> None:
-    fake = FakeBedrock(
+async def test_final_vote_reasons_fresh_instead_of_reusing_debate_intent(
+    monkeypatch,
+) -> None:
+    fake = FakeNative(
         json.dumps(
             {
                 "adoption_outcome": "Seat 1 reaches the threshold and wins immediately.",
@@ -152,7 +173,8 @@ async def test_final_vote_reasons_fresh_instead_of_reusing_debate_intent() -> No
             }
         )
     )
-    policy = OpusPolicy("ivan", client=fake)
+    monkeypatch.setattr("gnomic.players.llm.complete_native", fake.complete)
+    policy = OpusPolicy("ivan")
     policy.seat = 0
     policy.proposer = 1
     policy.turns_max = 9
@@ -188,7 +210,7 @@ async def test_final_vote_reasons_fresh_instead_of_reusing_debate_intent() -> No
 
 
 def test_strategic_schedule_uses_variable_order_and_public_cursor() -> None:
-    policy = OpusPolicy("ivan", client=FakeBedrock())
+    policy = OpusPolicy("ivan")
     policy.seat = 0
     policy.proposer = 2
     policy.turns_max = 9
@@ -207,7 +229,7 @@ def test_strategic_schedule_uses_variable_order_and_public_cursor() -> None:
 
 
 def test_reconnect_history_is_compacted_before_future_prompts() -> None:
-    policy = OpusPolicy("yura", client=FakeBedrock())
+    policy = OpusPolicy("yura")
     policy._load_history(
         [
             {
@@ -217,11 +239,19 @@ def test_reconnect_history_is_compacted_before_future_prompts() -> None:
                     "attempts": [
                         {
                             "action": {"text": "A" * 1_500},
-                            "ruling": {"valid": True, "summary": "Done.", "state_ops": []},
+                            "ruling": {
+                                "valid": True,
+                                "summary": "Done.",
+                                "state_ops": [],
+                            },
                         }
                     ]
                 },
-                "proposal": {"kind": "enact", "text": "P" * 1_500, "rationale": "R" * 1_500},
+                "proposal": {
+                    "kind": "enact",
+                    "text": "P" * 1_500,
+                    "rationale": "R" * 1_500,
+                },
                 "debates": [{"seat": 0, "text": "D" * 1_500, "vote_intent": "aye"}],
                 "votes": [{"seat": 0, "vote": "aye", "reason": "V" * 1_500}],
                 "passed_vote": True,
@@ -236,6 +266,6 @@ def test_reconnect_history_is_compacted_before_future_prompts() -> None:
 
 
 def test_policy_introduces_itself_with_its_gnome_name() -> None:
-    policy = OpusPolicy("anton", client=FakeBedrock())
+    policy = OpusPolicy("anton")
     reply = asyncio.run(policy.respond({"type": "introduce_request", "rid": 7}))
     assert reply == {"rid": 7, "name": "Anton"}

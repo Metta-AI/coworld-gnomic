@@ -8,16 +8,20 @@ conformance gate. `WebSocketSeatChannel` (ws_channel.py) is the live transport.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 
 
 class SeatChannel:
     seat: int
     connected: bool = False
+    private_receive: Callable[[dict], dict | None] = staticmethod(lambda packet: packet)
 
     async def send(self, message: dict) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
-    async def recv_reply(self, rid: int, timeout: float) -> dict | None:  # pragma: no cover
+    async def recv_reply(
+        self, rid: int, timeout: float
+    ) -> dict | None:  # pragma: no cover
         raise NotImplementedError
 
     def close_reader(self) -> None:
@@ -52,7 +56,7 @@ class QueueChannelMixin:
                 return None
             try:
                 msg = await asyncio.wait_for(self._queue.get(), timeout=remaining)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return None
             if not isinstance(msg, dict):
                 continue
@@ -74,7 +78,9 @@ class InProcessChannel(QueueChannelMixin, SeatChannel):
         await self.outbox.put(message)
 
     async def player_send(self, message: dict) -> None:
-        await self._queue.put(message)
+        clean = self.private_receive(message)
+        if clean is not None:
+            await self._queue.put(clean)
 
     async def player_recv(self) -> dict:
         return await self.outbox.get()

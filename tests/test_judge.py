@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-import io
 import json
 
 import pytest
 
 from gnomic.engine import Board
-from gnomic.judge import ACTION_JUDGE_SYSTEM, JUDGE_SYSTEM, LlmJudge, DeterministicJudge, JudgeError, adjudicate, adjudicate_action
+from gnomic.judge import (
+    ACTION_JUDGE_SYSTEM,
+    JUDGE_SYSTEM,
+    DeterministicJudge,
+    JudgeError,
+    LlmJudge,
+    adjudicate,
+    adjudicate_action,
+)
 
 
 def test_judge_must_preserve_exact_proposer_sequence() -> None:
@@ -31,34 +38,45 @@ def record(*, passed: bool = True) -> dict:
 @pytest.mark.asyncio
 async def test_deterministic_judge_applies_starting_law() -> None:
     board = Board.initial()
-    ruling = await adjudicate(board, turn_record=record(), turn=1, turns_max=9, judge=DeterministicJudge())
+    ruling = await adjudicate(
+        board, turn_record=record(), turn=1, turns_max=9, judge=DeterministicJudge()
+    )
     assert ruling["adopted"] is True
     assert board.state.game_points() == [3, 0, 6]
     assert board.find_rule(209).text == "Tea is encouraged."  # type: ignore[union-attr]
 
 
-class FakeBedrock:
+class FakeNative:
     def __init__(self, payloads: list[dict]) -> None:
         self.payloads = payloads
         self.bodies: list[dict] = []
 
-    def invoke_model(self, *, modelId: str, body: str):
-        self.bodies.append(json.loads(body))
+    async def complete(self, body, model, **kwargs):
+        from gnomic.llm_transport import Response
+
+        self.bodies.append(body)
         payload = self.payloads.pop(0)
-        return {"body": io.BytesIO(json.dumps(payload).encode())}
+        return Response.model_validate({**payload, "model": model})
 
 
 def response(text: str) -> dict:
-    return {"content": [{"type": "text", "text": text}], "usage": {"input_tokens": 4, "output_tokens": 5}}
+    return {
+        "content": [{"type": "text", "text": text}],
+        "usage": {"input_tokens": 4, "output_tokens": 5},
+    }
 
 
 @pytest.mark.asyncio
-async def test_bedrock_judge_repairs_bad_json_once_and_uses_adaptive_high() -> None:
+async def test_native_judge_repairs_bad_json_once_and_uses_adaptive_high(
+    monkeypatch,
+) -> None:
     fixed = {
         "valid": True,
         "adopted": True,
         "summary": "Adopted and scored.",
-        "rule_ops": [{"op": "enact", "text": "Tea is encouraged.", "explanation": "harmless"}],
+        "rule_ops": [
+            {"op": "enact", "text": "Tea is encouraged.", "explanation": "harmless"}
+        ],
         "state_ops": [
             {
                 "op": "increment",
@@ -72,22 +90,23 @@ async def test_bedrock_judge_repairs_bad_json_once_and_uses_adaptive_high() -> N
         "winner_slots": [],
         "analysis_complete": True,
     }
-    fake = FakeBedrock([response("not json"), response(json.dumps(fixed))])
+    fake = FakeNative([response("not json"), response(json.dumps(fixed))])
+    monkeypatch.setattr("gnomic.judge.complete_native", fake.complete)
     board = Board.initial()
-    ruling = await adjudicate(board, turn_record=record(), turn=1, turns_max=9, judge=LlmJudge(client=fake))
+    ruling = await adjudicate(
+        board, turn_record=record(), turn=1, turns_max=9, judge=LlmJudge()
+    )
     assert ruling["usage"]["calls"] == 2
     assert board.state.points(0) == 10
     assert fake.bodies[0]["thinking"] == {"type": "adaptive"}
     assert fake.bodies[0]["max_tokens"] == 32768
     assert fake.bodies[0]["output_config"] == {
         "effort": "high",
-        "task_budget": {"type": "tokens", "total": 20000},
     }
-    assert fake.bodies[0]["anthropic_beta"] == ["task-budgets-2026-03-13"]
 
 
 @pytest.mark.asyncio
-async def test_bedrock_judge_never_adopts_failed_vote() -> None:
+async def test_native_judge_never_adopts_failed_vote(monkeypatch) -> None:
     bad = {
         "valid": True,
         "adopted": True,
@@ -96,13 +115,14 @@ async def test_bedrock_judge_never_adopts_failed_vote() -> None:
         "state_ops": [],
         "winner_slots": [],
     }
-    fake = FakeBedrock([response(json.dumps(bad)), response(json.dumps(bad))])
+    fake = FakeNative([response(json.dumps(bad)), response(json.dumps(bad))])
+    monkeypatch.setattr("gnomic.judge.complete_native", fake.complete)
     with pytest.raises(JudgeError, match="failed vote"):
-        await LlmJudge(client=fake).rule(Board.initial(), record(passed=False), 1, 9)
+        await LlmJudge().rule(Board.initial(), record(passed=False), 1, 9)
 
 
 @pytest.mark.asyncio
-async def test_bedrock_judge_repairs_rewritten_rule_text() -> None:
+async def test_native_judge_repairs_rewritten_rule_text(monkeypatch) -> None:
     rewritten = {
         "valid": True,
         "adopted": True,
@@ -116,23 +136,33 @@ async def test_bedrock_judge_repairs_rewritten_rule_text() -> None:
         "summary": "Copied exactly.",
         "rule_ops": [{"op": "enact", "text": "Tea is encouraged."}],
     }
-    fake = FakeBedrock([response(json.dumps(rewritten)), response(json.dumps(exact))])
-    ruling, usage = await LlmJudge(client=fake).rule(Board.initial(), record(), 1, 9)
+    fake = FakeNative([response(json.dumps(rewritten)), response(json.dumps(exact))])
+    monkeypatch.setattr("gnomic.judge.complete_native", fake.complete)
+    ruling, usage = await LlmJudge().rule(Board.initial(), record(), 1, 9)
     assert ruling.rule_dicts() == [{"op": "enact", "text": "Tea is encouraged."}]
     assert usage["calls"] == 2
 
 
 @pytest.mark.asyncio
-async def test_action_judge_interprets_natural_language_as_bounded_state_only() -> None:
+async def test_action_judge_interprets_natural_language_as_bounded_state_only(
+    monkeypatch,
+) -> None:
     action = {
         "valid": True,
         "summary": "Seat 1 spends a key.",
         "state_ops": [
-            {"op": "increment", "scope": "player", "seat": 1, "key": "keys", "value": -1}
+            {
+                "op": "increment",
+                "scope": "player",
+                "seat": 1,
+                "key": "keys",
+                "value": -1,
+            }
         ],
         "winner_slots": [],
     }
-    fake = FakeBedrock([response(json.dumps(action))])
+    fake = FakeNative([response(json.dumps(action))])
+    monkeypatch.setattr("gnomic.judge.complete_native", fake.complete)
     board = Board.initial()
     board.state.players[1]["keys"] = 1
 
@@ -141,7 +171,7 @@ async def test_action_judge_interprets_natural_language_as_bounded_state_only() 
         action_record={"player": 1, "text": "I spend my key."},
         turn=4,
         turns_max=45,
-        judge=LlmJudge(client=fake),
+        judge=LlmJudge(),
     )
 
     assert ruling["valid"] is True

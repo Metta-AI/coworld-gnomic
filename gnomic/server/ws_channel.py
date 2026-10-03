@@ -32,7 +32,9 @@ class WebSocketSeatChannel(QueueChannelMixin, SeatChannel):
                 except json.JSONDecodeError:
                     continue  # unparseable frames are a no-op
                 if isinstance(msg, dict):
-                    await self._queue.put(msg)
+                    clean = self.private_receive(msg)
+                    if clean is not None:
+                        await self._queue.put(clean)
         except (WebSocketDisconnect, RuntimeError):
             self.connected = False
 

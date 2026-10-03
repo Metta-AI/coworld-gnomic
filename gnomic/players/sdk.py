@@ -17,12 +17,17 @@ submitting: zero unintended defaults is the admission gate.
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import os
 import sys
+import time
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from typing import Any
+
+from gnomic.llm_transport import AttemptPublisher, LearnerWindow, current_window
 
 from ..protocol import make_reply
 
@@ -78,7 +83,9 @@ class GameView:
         mtype = msg.get("type")
         if isinstance(mtype, str) and mtype.endswith("_request"):
             self.request = msg
-        if mtype == "game_start":
+        if mtype == "lobby":
+            self.seat = msg["seat"]
+        elif mtype == "game_start":
             self.session = msg.get("session", {})
             self.host_constraints = msg.get("host_constraints", [])
             self.seat = msg.get("you", {}).get("seat", self.seat)
@@ -118,7 +125,10 @@ class GameView:
                     "proposal": self.proposal,
                     "votes": self.votes,
                     "passed_vote": msg.get("passed_vote"),
-                    "ruling": {"summary": msg.get("summary", ""), "source": msg.get("source", "")},
+                    "ruling": {
+                        "summary": msg.get("summary", ""),
+                        "source": msg.get("source", ""),
+                    },
                 }
             )
         elif mtype == "game_over":
@@ -225,12 +235,27 @@ class PlayerSession:
         loop = asyncio.get_event_loop()
         budget = max(0.1, timeout_s - REPLY_MARGIN_S)
         fn = getattr(self.policy, phase)
+        view = copy.deepcopy(self.view)
+        publish = AttemptPublisher(view.request["rid"], self.transport.send)
+        window = LearnerWindow(
+            view.seat, type(self.policy).__name__, time.monotonic() + budget, publish
+        )
+        token = current_window.set(window)
+        context = copy_context()
         try:
-            return await asyncio.wait_for(loop.run_in_executor(None, fn, self.view), timeout=budget)
-        except asyncio.TimeoutError:
-            self.defaults.append(DefaultEvent(self.view.turn, phase, "timeout"))
-        except Exception as e:  # noqa: BLE001 - a broken callback must not kill the episode
-            self.defaults.append(DefaultEvent(self.view.turn, phase, f"exception: {type(e).__name__}: {e}"))
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: context.run(fn, view)),
+                timeout=budget,
+            )
+        except TimeoutError:
+            self.defaults.append(DefaultEvent(view.turn, phase, "timeout"))
+        except Exception as e:  # noqa: BLE001 - existing callback boundary applies engine defaults
+            self.defaults.append(
+                DefaultEvent(view.turn, phase, f"exception: {type(e).__name__}: {e}")
+            )
+        finally:
+            current_window.reset(token)
+            await publish.drain()
         return None
 
     async def handle(self, msg: dict) -> None:
@@ -245,39 +270,62 @@ class PlayerSession:
             if isinstance(name, str) and name.strip():
                 await self.transport.send(make_reply(msg["rid"], {"name": name}))
             elif name is not None:
-                self.defaults.append(DefaultEvent(self.view.turn, "introduce", "empty return"))
+                self.defaults.append(
+                    DefaultEvent(self.view.turn, "introduce", "empty return")
+                )
         elif mtype in {"action_request", "action_repair_request"}:
             action = await self._callback("action", msg.get("timeout_s", 10))
             if isinstance(action, str) and action.strip():
                 await self.transport.send(make_reply(msg["rid"], {"action": action}))
             elif action is not None:
-                self.defaults.append(DefaultEvent(self.view.turn, "action", "empty return"))
+                self.defaults.append(
+                    DefaultEvent(self.view.turn, "action", "empty return")
+                )
         elif mtype == "proposal_request":
             proposal = await self._callback("propose", msg.get("timeout_s", 10))
             if isinstance(proposal, dict):
-                await self.transport.send(make_reply(msg["rid"], {"proposal": proposal}))
+                await self.transport.send(
+                    make_reply(msg["rid"], {"proposal": proposal})
+                )
             elif isinstance(proposal, str) and proposal.strip():
-                await self.transport.send(make_reply(msg["rid"], {"proposal": {
-                    "kind": "enact", "text": proposal.strip(), "rationale": "SDK shorthand proposal"
-                }}))
+                await self.transport.send(
+                    make_reply(
+                        msg["rid"],
+                        {
+                            "proposal": {
+                                "kind": "enact",
+                                "text": proposal.strip(),
+                                "rationale": "SDK shorthand proposal",
+                            }
+                        },
+                    )
+                )
             elif proposal is not None:
-                self.defaults.append(DefaultEvent(self.view.turn, "propose", "empty return"))
+                self.defaults.append(
+                    DefaultEvent(self.view.turn, "propose", "empty return")
+                )
         elif mtype == "debate_request":
             debate = await self._callback("debate", msg.get("timeout_s", 10))
             if isinstance(debate, dict) and isinstance(debate.get("text"), str):
                 await self.transport.send(make_reply(msg["rid"], debate))
             elif isinstance(debate, str) and debate.strip():
-                await self.transport.send(make_reply(msg["rid"], {
-                    "text": debate.strip(), "vote_intent": "nay"
-                }))
+                await self.transport.send(
+                    make_reply(
+                        msg["rid"], {"text": debate.strip(), "vote_intent": "nay"}
+                    )
+                )
             elif debate is not None:
-                self.defaults.append(DefaultEvent(self.view.turn, "debate", "empty return"))
+                self.defaults.append(
+                    DefaultEvent(self.view.turn, "debate", "empty return")
+                )
         elif mtype == "vote_request":
             vote = await self._callback("vote", msg.get("timeout_s", 6))
             if vote in ("aye", "nay"):
                 await self.transport.send(make_reply(msg["rid"], {"vote": vote}))
             elif vote is not None:
-                self.defaults.append(DefaultEvent(self.view.turn, "vote", f"invalid return {vote!r}"))
+                self.defaults.append(
+                    DefaultEvent(self.view.turn, "vote", f"invalid return {vote!r}")
+                )
         elif mtype == "final":
             self.final = msg
 
@@ -289,7 +337,9 @@ class PlayerSession:
                 await self.handle(msg)
 
 
-async def run_ws_player(policy: Policy, url: str | None = None, *, max_attempts: int = 8) -> None:
+async def run_ws_player(
+    policy: Policy, url: str | None = None, *, max_attempts: int = 8
+) -> None:
     """Connect to the game (reconnecting with backoff) and play until `final`."""
     url = url or os.environ["COWORLD_PLAYER_WS_URL"]
     session = PlayerSession(policy, WebSocketTransport(url))
@@ -301,17 +351,24 @@ async def run_ws_player(policy: Policy, url: str | None = None, *, max_attempts:
             attempt = 0
             session.transport = transport
             await session.run()
-        except Exception as e:  # noqa: BLE001 - reconnect on any transport error
+        except Exception as e:
             attempt += 1
             if attempt >= max_attempts:
-                print(f"[sdk] giving up after {attempt} connection failures: {e}", file=sys.stderr, flush=True)
+                print(
+                    f"[sdk] giving up after {attempt} connection failures: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 raise
             await asyncio.sleep(min(5.0, 0.5 * attempt))
         finally:
             await transport.close()
     for event in session.defaults:
-        print(f"[sdk] defaulted turn={event.turn} phase={event.phase}: {event.reason}",
-              file=sys.stderr, flush=True)
+        print(
+            f"[sdk] defaulted turn={event.turn} phase={event.phase}: {event.reason}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def main_for(policy_factory) -> None:

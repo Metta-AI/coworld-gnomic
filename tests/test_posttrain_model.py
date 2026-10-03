@@ -7,7 +7,8 @@ import json
 
 import pytest
 
-from gnomic.players.posttrain_model import ModelPolicy
+from gnomic.llm_transport import Response
+from gnomic.players.native import NativePolicy
 from gnomic.players.sdk import GameView, InProcessTransport, PlayerSession
 from gnomic.server.channel import InProcessChannel
 from gnomic.server.config import GameConfig
@@ -39,10 +40,21 @@ def scripted_generation(messages: list[dict[str, str]], _deadline: float) -> str
 
 
 @pytest.mark.asyncio
-async def test_model_policy_completes_normal_three_seat_game() -> None:
+async def test_model_policy_completes_normal_three_seat_game(monkeypatch) -> None:
+    async def complete(body, model, **kwargs):
+        text = scripted_generation(
+            [{"role": "system", "content": body["system"]}, *body["messages"]], 0
+        )
+        return Response(
+            model=model,
+            content=[{"type": "text", "text": text}],
+            usage={"input_tokens": 1, "output_tokens": 1},
+        )
+
+    monkeypatch.setattr("gnomic.players.native.complete_native", complete)
     channels = [InProcessChannel(seat) for seat in range(3)]
     sessions = [
-        PlayerSession(ModelPolicy(scripted_generation), InProcessTransport(channel))
+        PlayerSession(NativePolicy(), InProcessTransport(channel))
         for channel in channels
     ]
     tasks = [asyncio.create_task(session.run()) for session in sessions]
@@ -73,10 +85,18 @@ async def test_model_policy_completes_normal_three_seat_game() -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_policy_rejects_wrong_request_id() -> None:
+async def test_model_policy_rejects_wrong_request_id(monkeypatch) -> None:
+    async def wrong_reply(body, model, **kwargs):
+        return Response(
+            model=model,
+            content=[{"type": "text", "text": '{"rid":99,"action":"pass"}'}],
+            usage={"input_tokens": 1, "output_tokens": 1},
+        )
+
+    monkeypatch.setattr("gnomic.players.native.complete_native", wrong_reply)
     channel = InProcessChannel(0)
     session = PlayerSession(
-        ModelPolicy(lambda _messages, _deadline: '{"rid":99,"action":"pass"}'),
+        NativePolicy(),
         InProcessTransport(channel),
     )
     session.view = GameView(seat=0, turn=1)

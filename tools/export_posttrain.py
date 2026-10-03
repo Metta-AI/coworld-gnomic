@@ -1,4 +1,4 @@
-"""Export complete deterministic Gnomic games through the normal player SDK."""
+"""Export whole authoritative Gnomic episodes with the ordinary Scribe player SDK."""
 
 from __future__ import annotations
 
@@ -8,136 +8,129 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Any
 
-from gnomic.players.posttrain_prompt import messages_for
 from gnomic.players.scribe import ScribePolicy
-from gnomic.players.sdk import GameView, InProcessTransport, PlayerSession
+from gnomic.players.sdk import InProcessTransport, PlayerSession
 from gnomic.server.channel import InProcessChannel
 from gnomic.server.config import GameConfig
 from gnomic.server.episode import Episode
+from gnomic.training import TrainingEpisode, write_private_episode
 
 ROOT = Path(__file__).resolve().parents[1]
-DECISIONS = {"introduce_request", "action_request", "action_repair_request", "proposal_request", "debate_request", "vote_request"}
 
 
-class RecordingTransport(InProcessTransport):
-    def __init__(self, channel: InProcessChannel, view: GameView) -> None:
-        super().__init__(channel)
-        self.view = view
-        self.request: dict[str, Any] | None = None
-        self.rows: list[dict[str, Any]] = []
-
-    async def recv(self) -> dict:
-        message = await super().recv()
-        if message["type"] in DECISIONS:
-            self.request = message
-        return message
-
-    async def send(self, message: dict) -> None:
-        assert self.request is not None and message["rid"] == self.request["rid"]
-        self.rows.append(
-            {
-                "rid": message["rid"],
-                "seat": self.view.seat,
-                "request": self.request,
-                "prompt": messages_for(self.view),
-                "reply": message,
-            }
-        )
-        await super().send(message)
-        self.request = None
-
-
-async def collect(seed: int, config_values: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+async def collect(seed: int, config_values: dict) -> TrainingEpisode:
     channels = [InProcessChannel(seat) for seat in range(3)]
-    sessions: list[PlayerSession] = []
-    recorders: list[RecordingTransport] = []
-    for channel in channels:
-        view = GameView()
-        recorder = RecordingTransport(channel, view)
-        session = PlayerSession(ScribePolicy(), recorder)
-        session.view = view
-        sessions.append(session)
-        recorders.append(recorder)
+    sessions = [
+        PlayerSession(ScribePolicy(), InProcessTransport(channel))
+        for channel in channels
+    ]
     tasks = [asyncio.create_task(session.run()) for session in sessions]
-    config = GameConfig.model_validate({**config_values, "tokens": ["a", "b", "c"], "seed": seed})
-    results, replay = await Episode(config, channels, seed=seed).run()
+    config = GameConfig.model_validate(
+        {**config_values, "tokens": ["a", "b", "c"], "seed": seed}
+    )
+    episode = Episode(config, channels, seed=seed, teacher_seats=frozenset(range(3)))
+    results, replay = await episode.run()
     for channel in channels:
         await channel.send({"type": "final", "scores": results["scores"]})
     await asyncio.gather(*tasks)
     assert all(not session.defaults for session in sessions)
-    assert all(not event["action"]["default"] for event in replay["events"] if event["type"] == "action_made")
-    rows = sorted((row for recorder in recorders for row in recorder.rows), key=lambda row: row["rid"])
-    assert rows and [row["rid"] for row in rows] == list(range(1, len(rows) + 1))
-    return rows, results
-
-
-def write_private(path: Path, content: str) -> None:
-    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as output:
-        output.write(content)
+    assert all(
+        not event["action"]["default"]
+        for event in replay["events"]
+        if event["type"] == "action_made"
+    )
+    return episode.capture.finish()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
-    parser.add_argument("--episodes", type=int, default=10)
-    parser.add_argument("--first-seed", type=int, default=1)
-    parser.add_argument("--turns-max", type=int, default=45)
-    args = parser.parse_args()
-    if args.episodes < 10 or args.first_seed < 1 or not 1 <= args.turns_max <= 45:
-        raise ValueError("Require at least ten episodes, a positive first seed, and 1-45 turns")
-    source_revision = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True
-    ).stdout.strip()
-    manifest = json.loads((ROOT / "coworld_manifest_template.json").read_text())
-    config_values = {
-        **manifest["certification"]["game_config"],
-        "turns_max": args.turns_max,
-        "players": [{"name": f"scribe-{seat}"} for seat in range(3)],
-    }
-    output_rows: dict[str, list[str]] = {"train": [], "validation": []}
-    runs = []
-    for seed in range(args.first_seed, args.first_seed + args.episodes):
-        decisions, result = asyncio.run(collect(seed, config_values))
-        split = "validation" if seed % 5 == 0 else "train"
-        episode_id = f"gnomic-scribe-{seed}"
-        for row in decisions:
-            example = {
-                "episode_id": episode_id,
-                "seed": episode_id,
-                "decision_id": row["rid"],
-                "prompt": row["prompt"],
-                "completion": [{"role": "assistant", "content": json.dumps(row["reply"])}],
-                "game": "gnomic",
-                "action_schema_revision": "gnomic-player-v1",
-            }
-            output_rows[split].append(json.dumps(example, ensure_ascii=False))
-        runs.append({"seed": seed, "decisions": len(decisions), "scores": result["scores"], "turns": result["turns_played"]})
-    if not all(output_rows.values()):
-        raise ValueError("Both training and validation splits need complete episodes")
-    args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
-    for split, rows in output_rows.items():
-        write_private(args.output / f"{split}.jsonl", "\n".join(rows) + "\n")
-    write_private(
-        args.output / "manifest.json",
-        json.dumps(
-            {
-                "schema_version": 1,
-                "game": "gnomic",
-                "action_schema_revision": "gnomic-player-v1",
-                "source_revision": source_revision,
-                "teacher": "scribe",
-                "judge": "deterministic",
-                "turns_max": args.turns_max,
-                "train_examples": len(output_rows["train"]),
-                "validation_examples": len(output_rows["validation"]),
-                "runs": runs,
-            },
-            indent=2,
-        ) + "\n",
+    parser.add_argument(
+        "--episodes", type=int, default=10, help="Whole games per manifest variant"
     )
-    print(f"train={len(output_rows['train'])} validation={len(output_rows['validation'])}")
+    parser.add_argument("--first-seed", type=int, default=0)
+    parser.add_argument(
+        "--turns-max",
+        type=int,
+        help="Explicit diagnostic cap; omit for the declared whole variant",
+    )
+    parser.add_argument("--judge-mode", choices=("native", "deterministic"))
+    args = parser.parse_args()
+    if (
+        args.episodes < 10
+        or args.first_seed < 0
+        or (args.turns_max is not None and not 1 <= args.turns_max <= 45)
+    ):
+        raise ValueError(
+            "Require ten games per variant, nonnegative seeds and a valid explicit cap"
+        )
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    if dirty:
+        raise ValueError("Teacher export requires clean committed source")
+    source = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    os.environ["COWORLD_SOURCE_REVISION"] = source
+    os.environ["COWORLD_GAME_VERSION"] = (
+        f"source-{source}-{args.judge_mode or 'declared'}"
+        + (f"-cap{args.turns_max}" if args.turns_max is not None else "")
+    )
+    manifest = json.loads((ROOT / "coworld_manifest_template.json").read_text())
+    args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    runs = []
+    for variant in manifest["variants"]:
+        config = {
+            **variant["game_config"],
+            "judge_mode": args.judge_mode or variant["game_config"]["judge_mode"],
+            "players": [{"name": "scripted-scribe"} for _ in range(3)],
+        }
+        if args.turns_max is not None:
+            config["turns_max"] = args.turns_max
+        for seed in range(args.first_seed, args.first_seed + args.episodes):
+            os.environ["COWORLD_EPISODE_ID"] = (
+                f"gnomic-{variant['id']}-scribe-{seed}-{source[:12]}"
+            )
+            episode = asyncio.run(collect(seed, config))
+            path = args.output / f"{variant['id']}-{seed}.jsonl"
+            write_private_episode(path.as_uri(), episode)
+            runs.append(
+                {
+                    "variant": variant["id"],
+                    "seed": seed,
+                    "seed_family": episode.episode.seed_family,
+                    "path": path.name,
+                    "status": episode.episode.status,
+                    "decisions": len(episode.decisions),
+                }
+            )
+    summary = {
+        "source_revision": source,
+        "game_version": os.environ["COWORLD_GAME_VERSION"],
+        "teacher": "scripted-scribe",
+        "judge": args.judge_mode,
+        "runs": runs,
+        "review_status": "unreviewed",
+        "qualification": "Run Coworld SDK qualifier and Metta hosted importer against these private episodes",
+    }
+    with os.fdopen(
+        os.open(
+            args.output / "manifest.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+        ),
+        "w",
+    ) as output:
+        output.write(json.dumps(summary, indent=2) + "\n")
+    print(f"whole_games={len(runs)} decisions={sum(r['decisions'] for r in runs)}")
 
 
 if __name__ == "__main__":
