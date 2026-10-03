@@ -6,7 +6,8 @@ import asyncio
 import signal
 from collections.abc import Callable, Coroutine
 from contextvars import ContextVar
-from typing import Any, TypeVar
+from dataclasses import dataclass
+from typing import Any, Literal, TypeVar
 
 from gnomic.protocol import Stop, Stopped
 
@@ -71,11 +72,17 @@ async def bounded(work: Coroutine[Any, Any, T], deadline: float) -> T:
                 )
 
 
+@dataclass(frozen=True)
+class PlayerExit:
+    kind: Literal["final", "stopped"]
+    cleanup_deadline: float
+
+
 async def player_loop(
-    recv: Callable[[], Coroutine[Any, Any, dict]],
+    recv: Callable[[], Coroutine[Any, Any, dict | None]],
     send: Callable[[dict], Coroutine[Any, Any, None]],
     handle: Callable[[dict], Coroutine[Any, Any, None]],
-) -> None:
+) -> PlayerExit:
     """Receive engine stop controls while the owned policy callback is active."""
     children: set[asyncio.Task] = set()
     token = owned_children.set(children)
@@ -91,9 +98,28 @@ async def player_loop(
             active = {receiver}
             if callback is not None:
                 active.add(callback)
-            done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+            timeout = None
+            if stopping:
+                assert owner_deadline[0] is not None
+                # Reserve half the remaining absolute budget to settle the final reader.
+                timeout = (
+                    max(0, owner_deadline[0] - asyncio.get_running_loop().time()) / 2
+                )
+            done, _ = await asyncio.wait(
+                active, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+            if not done:
+                assert owner_deadline[0] is not None
+                return PlayerExit("stopped", owner_deadline[0])
             if receiver in done:
                 message = receiver.result()
+                if message is None:
+                    if stopping:
+                        assert owner_deadline[0] is not None
+                        return PlayerExit("stopped", owner_deadline[0])
+                    raise ConnectionError(
+                        "player transport closed before final or ownership stop"
+                    )
                 if message.get("type") == "stop":
                     control = Stop.model_validate(message)
                     stopping = True
@@ -124,7 +150,8 @@ async def player_loop(
                         "decision or repeated stop after ownership acknowledgement"
                     )
                 backlog.append(message)
-                receiver = asyncio.create_task(recv())
+                if message.get("type") != "final":
+                    receiver = asyncio.create_task(recv())
             if callback is not None and callback in done:
                 callback.result()
                 callback = None
@@ -132,8 +159,17 @@ async def player_loop(
                 message = backlog.pop(0)
                 callback = asyncio.create_task(handle(message))
                 if message.get("type") == "final":
-                    await callback
-                    return
+                    if owner_deadline[0] is None:
+                        owner_deadline[0] = (
+                            asyncio.get_running_loop().time() + CLEANUP_SECONDS
+                        )
+                    finish_deadline = (
+                        asyncio.get_running_loop().time() + owner_deadline[0]
+                    ) / 2
+                    if not await settle({callback}, finish_deadline, cancel=False):
+                        raise OwnershipUnsettled("final callback ownership unresolved")
+                    callback.result()
+                    return PlayerExit("final", owner_deadline[0])
     finally:
         # A stop handshake already spent its one absolute budget.
         deadline = (

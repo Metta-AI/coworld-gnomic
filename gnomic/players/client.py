@@ -48,16 +48,22 @@ async def run_policy(policy: Policy, url: str | None = None) -> None:
         if reply is not None:
             await send(reply)
 
-    async def receive() -> dict:
-        return json.loads(await websocket.recv())
+    async def receive() -> dict | None:
+        raw = await anext(websocket.__aiter__(), None)
+        return None if raw is None else json.loads(raw)
 
     async def send(message: dict) -> None:
         await websocket.send(json.dumps(message, ensure_ascii=False))
 
+    cleanup_deadline = float("inf")
     try:
-        await player_loop(receive, send, handle)
+        exit_state = await player_loop(receive, send, handle)
+        cleanup_deadline = exit_state.cleanup_deadline
     finally:
-        await bounded(websocket.close(), asyncio.get_running_loop().time() + 1)
+        await bounded(
+            websocket.close(),
+            min(cleanup_deadline, asyncio.get_running_loop().time() + 1),
+        )
 
 
 def main(policy: Policy) -> None:

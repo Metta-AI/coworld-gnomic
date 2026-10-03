@@ -174,7 +174,7 @@ class DefaultEvent:
 
 
 class Transport:
-    async def recv(self) -> dict:  # pragma: no cover - interface
+    async def recv(self) -> dict | None:  # pragma: no cover - interface
         raise NotImplementedError
 
     async def send(self, message: dict) -> None:  # pragma: no cover - interface
@@ -190,7 +190,7 @@ class InProcessTransport(Transport):
     def __init__(self, channel: Any) -> None:
         self.channel = channel
 
-    async def recv(self) -> dict:
+    async def recv(self) -> dict | None:
         return await self.channel.player_recv()
 
     async def send(self, message: dict) -> None:
@@ -207,10 +207,10 @@ class WebSocketTransport(Transport):
 
         self.ws = await websockets.connect(self.url, max_size=8 * 1024 * 1024)
 
-    async def recv(self) -> dict:
+    async def recv(self) -> dict | None:
         assert self.ws is not None
-        raw = await self.ws.recv()
-        return json.loads(raw)
+        raw = await anext(self.ws.__aiter__(), None)
+        return None if raw is None else json.loads(raw)
 
     async def send(self, message: dict) -> None:
         assert self.ws is not None
@@ -231,6 +231,8 @@ class PlayerSession:
         self.view = GameView()
         self.defaults: list[DefaultEvent] = []
         self.final: dict | None = None
+        self.stopped = False
+        self.cleanup_deadline = float("inf")
 
     async def _callback(self, phase: str, timeout_s: float) -> Any:
         """Await native policy work under its owned absolute decision deadline."""
@@ -333,7 +335,11 @@ class PlayerSession:
 
     async def run(self) -> None:
         """Consume messages until `final`. Treat any close after `final` as clean."""
-        await player_loop(self.transport.recv, self.transport.send, self.handle)
+        exit_state = await player_loop(
+            self.transport.recv, self.transport.send, self.handle
+        )
+        self.stopped = exit_state.kind == "stopped"
+        self.cleanup_deadline = exit_state.cleanup_deadline
 
 
 async def run_ws_player(
@@ -343,7 +349,7 @@ async def run_ws_player(
     url = url or os.environ["COWORLD_PLAYER_WS_URL"]
     session = PlayerSession(policy, WebSocketTransport(url))
     attempt = 0
-    while session.final is None:
+    while session.final is None and not session.stopped:
         transport = WebSocketTransport(url)
         try:
             await transport.connect()

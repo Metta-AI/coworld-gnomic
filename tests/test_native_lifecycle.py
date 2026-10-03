@@ -631,3 +631,51 @@ async def test_received_bytes_require_monotonic_prefix_and_freeze_at_eof(field):
     with pytest.raises(ValueError, match="completed response"):
         channel.consume_progress({**packet, "attempt": extended.model_dump()})
     assert channel.evidence_for(1)[0] == final
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["eof", "final", "stalled"])
+@pytest.mark.parametrize("surface", ["merchant", "sdk"])
+async def test_joined_stop_transport_exit_without_final(monkeypatch, ending, surface):
+    import json
+
+    import websockets
+
+    from gnomic import lifecycle
+    from gnomic.players.client import run_policy
+    from gnomic.players.sdk import Policy, run_ws_player
+
+    monkeypatch.setattr(lifecycle, "CLEANUP_SECONDS", 0.2)
+    connections = []
+    received_final = []
+
+    class Merchant:
+        async def respond(self, message):
+            received_final.append(message)
+            return None
+
+    class SdkPolicy(Policy):
+        def on_message(self, view, message):
+            received_final.append(message)
+
+    async def game(connection):
+        connections.append(connection)
+        await connection.send(json.dumps({"type": "stop", "stop_id": "owned-stop"}))
+        control = json.loads(await connection.recv())
+        assert control == {"type": "stopped", "stop_id": "owned-stop"}
+        if ending == "final":
+            await connection.send(json.dumps({"type": "final", "scores": [1, 0, 0]}))
+        if ending == "stalled":
+            await connection.wait_closed()
+
+    async with websockets.serve(game, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        url = f"ws://127.0.0.1:{port}"
+        work = (
+            run_policy(Merchant(), url)
+            if surface == "merchant"
+            else run_ws_player(SdkPolicy(), url, max_attempts=1)
+        )
+        await asyncio.wait_for(lifecycle.run_owned(work), timeout=1)
+    assert len(connections) == 1
+    assert bool(received_final) == (ending == "final")
