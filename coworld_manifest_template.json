@@ -235,18 +235,6 @@
         "-m",
         "gnomic.players.baseline"
       ]
-    },
-    {
-      "id": "training-native",
-      "name": "Gnomic Native Learner",
-      "type": "player",
-      "description": "Canonical native Messages player for a platform-registered saved checkpoint; exact private prompts and applied decisions.",
-      "image": "{{GNOMIC_IMAGE}}",
-      "run": [
-        "python",
-        "-m",
-        "gnomic.players.native"
-      ]
     }
   ],
   "commissioner": [
