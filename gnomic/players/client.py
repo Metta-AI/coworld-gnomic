@@ -24,7 +24,7 @@ async def run_policy(policy: Policy, url: str | None = None) -> None:
     ws_url = url or os.environ.get("COWORLD_PLAYER_WS_URL")
     if not ws_url:
         raise RuntimeError("COWORLD_PLAYER_WS_URL is required")
-    websocket = await websockets.connect(ws_url, max_size=256 * 1024, ping_interval=20)
+    websocket = await websockets.connect(ws_url, max_size=16 * 1024 * 1024, ping_interval=20)
 
     async def handle(message: dict) -> None:
         if message["type"] == "lobby":

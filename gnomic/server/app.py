@@ -438,6 +438,7 @@ def main() -> None:
         host=os.environ.get("COGAME_HOST", "0.0.0.0"),
         port=int(os.environ.get("COGAME_PORT", "8080")),
         log_level=os.environ.get("LOG_LEVEL", "info").lower(),
+        ws_max_size=16 * 1024 * 1024,
     )
 
     class OwnedServer(uvicorn.Server):

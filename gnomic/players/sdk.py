@@ -205,7 +205,7 @@ class WebSocketTransport(Transport):
     async def connect(self) -> None:
         import websockets
 
-        self.ws = await websockets.connect(self.url, max_size=8 * 1024 * 1024)
+        self.ws = await websockets.connect(self.url, max_size=16 * 1024 * 1024)
 
     async def recv(self) -> dict | None:
         assert self.ws is not None

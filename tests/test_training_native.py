@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import socket
 import time
@@ -116,7 +117,9 @@ def fixture_reply(observation: dict) -> dict:
     return {"rid": request["rid"], **result}
 
 
-@pytest.mark.parametrize("mode", ["accepted", "sampled", "greedy", "malformed", "429"])
+@pytest.mark.parametrize(
+    "mode", ["accepted", "sampled", "greedy", "context_metadata", "malformed", "429"]
+)
 async def test_native_episode_retains_exact_calls_and_freezes_elder(
     tmp_path, monkeypatch, mode
 ):
@@ -173,9 +176,11 @@ async def test_native_episode_retains_exact_calls_and_freezes_elder(
                 "usage": {"input_tokens": 12, "output_tokens": 8},
                 "stop_reason": "end_turn",
             }
-            if slot is not None and mode in {"sampled", "greedy"}:
+            if slot is not None and mode in {"sampled", "greedy", "context_metadata"}:
                 reply["sampling_evidence"] = {
-                    "prompt_token_ids": [11, 22],
+                    "prompt_token_ids": list(range(32768))
+                    if mode == "context_metadata"
+                    else [11, 22],
                     "completion_token_ids": [33, 44],
                     "behavior_log_probs": [-0.2, -0.3] if mode == "sampled" else None,
                     "stop_reason": "end_turn",
@@ -280,8 +285,28 @@ async def test_native_episode_retains_exact_calls_and_freezes_elder(
             assert attempt.provider_request_id == "provider-" + call["id"]
             assert attempt.response_headers["x-softmax-llm-call-id"] == call["id"]
             assert attempt.latency_ms is not None
+            assert (
+                base64.b64decode(attempt.response_body_b64, validate=True)
+                == call["raw"].encode()
+            )
         assert all(a.inference_mode is None for a in environmental)
-        if mode in {"accepted", "sampled", "greedy"}:
+        if mode == "context_metadata":
+            assert all(
+                65536 < len(a.model_dump_json().encode()) < 16 * 1024 * 1024
+                for a in generated
+            )
+            assert generated and all(
+                a.prompt_token_ids == list(range(32768)) for a in generated
+            )
+            assert all(
+                a.response_complete is True and a.response_reader_joined is True
+                for a in generated
+            )
+            assert all(
+                a.response_body_b64 is not None and a.http_status == 200
+                for a in generated
+            )
+        if mode in {"accepted", "sampled", "greedy", "context_metadata"}:
             assert all(d.action_status == "accepted" for d in episode.decisions)
             assert any(
                 d.observation["view"]["request"]["type"] == "action_repair_request"
