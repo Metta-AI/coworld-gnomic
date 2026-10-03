@@ -9,14 +9,14 @@ for building your own LLM player.
 from __future__ import annotations
 
 import json
-import asyncio
 import os
 import sys
 
+from gnomic.lifecycle import OwnershipUnsettled
 from gnomic.llm_transport import complete_native
 
 from .scribe import ScribePolicy
-from .sdk import GameView, main_for
+from .sdk import GameView, Policy, main_for
 
 SYSTEM = """\
 You are seat {seat} in a game of Gnomic with {n} players. Players take turns \
@@ -40,21 +40,23 @@ class LlmClient:
             print(message, file=sys.stderr, flush=True)
             self._logged.add(key)
 
-    def complete(self, system: str, user: str, *, max_tokens: int) -> str | None:
+    async def complete(self, system: str, user: str, *, max_tokens: int) -> str | None:
         body = {
             "max_tokens": max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": user}],
         }
         try:
-            payload = asyncio.run(complete_native(
+            payload = await complete_native(
                 body, self.model_id, purpose="learner", timeout=120
-            ))
+            )
             self._log_once("ok", f"[native] using the model ({self.model_id})")
             return payload.text.strip() or None
         except (
             Exception
         ) as e:  # existing baseline fallback remains visible in private capture
+            if isinstance(e, OwnershipUnsettled):
+                raise
             self._log_once("fallback", f"[native] fell back: {type(e).__name__}")
             return None
 
@@ -75,17 +77,24 @@ def _context(view: GameView) -> str:
     )
 
 
-class HaikuPolicy(ScribePolicy):
+class HaikuPolicy(Policy):
     """LLM moves with scribe as the always-legal fallback."""
 
     def __init__(self) -> None:
         self.client = LlmClient()
+        self.baseline = ScribePolicy()
+
+    def introduce(self, view: GameView) -> str:
+        return self.baseline.introduce(view)
+
+    def action(self, view: GameView) -> str:
+        return self.baseline.action(view)
 
     def _system(self, view: GameView) -> str:
         return SYSTEM.format(seat=view.seat, n=view.num_players)
 
-    def propose(self, view: GameView) -> dict:
-        out = self.client.complete(
+    async def propose(self, view: GameView) -> dict:
+        out = await self.client.complete(
             self._system(view),
             "It is your turn to propose one rule change. Reply with ONLY the proposal text "
             "(one or two sentences, imperative, unambiguous).\n\nGame context:\n"
@@ -98,22 +107,22 @@ class HaikuPolicy(ScribePolicy):
                 "text": out,
                 "rationale": "Haiku baseline proposal.",
             }
-        return super().propose(view)
+        return self.baseline.propose(view)
 
-    def debate(self, view: GameView) -> dict:
-        out = self.client.complete(
+    async def debate(self, view: GameView) -> dict:
+        out = await self.client.complete(
             self._system(view),
             "Debate the current proposal in at most two sentences (you speak once). "
             "Reply with ONLY your statement.\n\nGame context:\n" + _context(view),
             max_tokens=120,
         )
         if out:
-            support = self._supports(view)
+            support = self.baseline._supports(view)
             return {"text": out, "vote_intent": "aye" if support else "nay"}
-        return super().debate(view)
+        return self.baseline.debate(view)
 
-    def vote(self, view: GameView) -> str:
-        out = self.client.complete(
+    async def vote(self, view: GameView) -> str:
+        out = await self.client.complete(
             self._system(view),
             "Vote on the current proposal. Reply with exactly one word: aye or nay.\n\n"
             "Game context:\n" + _context(view),
@@ -123,7 +132,7 @@ class HaikuPolicy(ScribePolicy):
             word = out.strip().lower().split()[0].strip(".,!\"'")
             if word in ("aye", "nay"):
                 return word
-        return super().vote(view)
+        return self.baseline.vote(view)
 
 
 if __name__ == "__main__":

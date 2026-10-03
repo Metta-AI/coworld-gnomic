@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictStr, ValidationError
 
 
 class _Msg(BaseModel):
@@ -154,6 +154,19 @@ class Snapshot(_Msg):
     phase: str
 
 
+class _StopControl(_Msg):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    stop_id: StrictStr = Field(min_length=1, max_length=128)
+
+
+class Stop(_StopControl):
+    type: Literal["stop"] = "stop"
+
+
+class Stopped(_StopControl):
+    type: Literal["stopped"] = "stopped"
+
+
 SERVER_MESSAGES: dict[str, type[_Msg]] = {
     "lobby": Lobby,
     "game_start": GameStart,
@@ -171,6 +184,7 @@ SERVER_MESSAGES: dict[str, type[_Msg]] = {
     "judge_ruling": JudgeRuling,
     "game_over": GameOver,
     "final": Final,
+    "stop": Stop,
     "snapshot": Snapshot,
 }
 

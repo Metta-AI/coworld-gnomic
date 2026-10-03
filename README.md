@@ -123,7 +123,7 @@ Hydrate and certify the manifest using the current `coworld` CLI from the Metta
 repository:
 
 ```bash
-uv run coworld build compose.yaml coworld_manifest_template.json 0.1.0 coworld_manifest.json
+uv run coworld build --version 0.1.0 --compose compose.yaml --template coworld_manifest_template.json --output coworld_manifest.json
 uv run coworld certify coworld_manifest.json --timeout-seconds 300
 ```
 
@@ -132,3 +132,25 @@ Releases run through `.github/workflows/coworld-release.yml`
 upload the three persona policies from `tools/ci/policies.json` → upload the
 coworld. The repo secret `SOFTMAX_TOKEN` is propagated by coworld-builder's
 `propagate-secrets.yml`.
+
+## Native shutdown ownership
+
+All native Elder, Opus, Haiku, and saved-model calls run asynchronously in the
+owned event loop. One absolute request deadline includes slow body trickles.
+Received identity-encoded bytes, observed status, completeness, reader release,
+and actual parsed header pairs remain private. Invalid UTF-8 prefixes survive
+interruption. Conflicting identity headers and unsupported encoding are rejected;
+schema errors hide private input values without suppressing failures.
+
+Every registered player connection receives an engine-owned `stop_id`. A matching
+`stopped` acknowledgement requires settled callback, native reader, and evidence
+writer ownership. An observed unjoined reader cannot be overridden by an ACK.
+Repeated signals share one cleanup deadline. Unresolved ownership seals a truncated
+private episode and withholds public results/replay. Refresh all shipped player
+images before deploying this protocol; source-only review does not publish them.
+
+The collector uses this same stop/join boundary. It retains one private partial
+record on interruption and complete raw episodes on success. Labels require
+independent content-bound teacher review or authenticated platform native receipts
+through the reviewed Metta importer. No local synthetic fixture can establish
+production Elder parity, genuine checkpoint inference, or improved strategy.

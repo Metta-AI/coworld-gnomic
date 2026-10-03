@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 import websockets
 
+from gnomic.lifecycle import bounded, main_owned, player_loop
 from gnomic.llm_transport import AttemptPublisher, LearnerWindow, current_window
 
 
@@ -23,40 +24,49 @@ async def run_policy(policy: Policy, url: str | None = None) -> None:
     ws_url = url or os.environ.get("COWORLD_PLAYER_WS_URL")
     if not ws_url:
         raise RuntimeError("COWORLD_PLAYER_WS_URL is required")
-    async with websockets.connect(
-        ws_url, max_size=256 * 1024, ping_interval=20
-    ) as websocket:
-        async for raw in websocket:
-            message = json.loads(raw)
-            if message["type"] == "lobby":
-                policy.seat = message["seat"]
-            if message.get("type") == "final":
-                # Give policies one terminal callback for usage/artifact logging.
-                await policy.respond(message)
-                return
-            token = None
-            publisher = None
-            if "rid" in message:
-                publisher = AttemptPublisher(
-                    message["rid"], lambda packet: websocket.send(json.dumps(packet))
-                )
-                window = LearnerWindow(
+    websocket = await websockets.connect(
+        ws_url, max_size=16 * 1024 * 1024, ping_interval=20
+    )
+
+    async def handle(message: dict) -> None:
+        if message["type"] == "lobby":
+            policy.seat = message["seat"]
+        token = None
+        if "rid" in message:
+            publisher = AttemptPublisher(message["rid"], send)
+            token = current_window.set(
+                LearnerWindow(
                     policy.seat,
                     type(policy).__name__,
                     time.monotonic() + message.get("timeout_s", 15),
                     publisher,
                 )
-                token = current_window.set(window)
-            try:
-                reply = await policy.respond(message)
-            finally:
-                if token is not None:
-                    current_window.reset(token)
-                if publisher is not None:
-                    await publisher.drain()
-            if reply is not None:
-                await websocket.send(json.dumps(reply, ensure_ascii=False))
+            )
+        try:
+            reply = await policy.respond(message)
+        finally:
+            if token is not None:
+                current_window.reset(token)
+        if reply is not None:
+            await send(reply)
+
+    async def receive() -> dict | None:
+        raw = await anext(websocket.__aiter__(), None)
+        return None if raw is None else json.loads(raw)
+
+    async def send(message: dict) -> None:
+        await websocket.send(json.dumps(message, ensure_ascii=False))
+
+    cleanup_deadline = float("inf")
+    try:
+        exit_state = await player_loop(receive, send, handle)
+        cleanup_deadline = exit_state.cleanup_deadline
+    finally:
+        await bounded(
+            websocket.close(),
+            min(cleanup_deadline, asyncio.get_running_loop().time() + 1),
+        )
 
 
 def main(policy: Policy) -> None:
-    asyncio.run(run_policy(policy))
+    main_owned(run_policy(policy))

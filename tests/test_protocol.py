@@ -9,6 +9,7 @@ def test_all_declared_message_types_have_models() -> None:
         "action_request", "action_repair_request", "action_made", "action_ruling",
         "debate_request", "debate_made", "vote_request", "vote_reveal",
         "judge_ruling", "game_over", "final", "snapshot",
+        "stop",
     }
 
 

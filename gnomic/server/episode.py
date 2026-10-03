@@ -7,6 +7,8 @@ import random
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from gnomic.lifecycle import bounded
+
 from ..engine import (
     HOST_CONSTRAINTS,
     SEAT_COUNT,
@@ -79,6 +81,8 @@ class Episode:
             )
 
     async def _send(self, channel: SeatChannel, message: dict) -> None:
+        if "rid" in message:
+            channel.register_window(message["rid"])
         self.capture.delivered(channel.seat, message)
         await channel.send(message)
 
@@ -372,7 +376,7 @@ class Episode:
         }
         if rejection_reason:
             action_record["prior_rejection"] = rejection_reason
-        ruling = await asyncio.wait_for(
+        ruling = await bounded(
             adjudicate_action(
                 self.board,
                 action_record=action_record,
@@ -380,7 +384,7 @@ class Episode:
                 turns_max=self.config.turns_max,
                 judge=self.judge,
             ),
-            timeout=self.config.judge_window_s,
+            deadline=asyncio.get_running_loop().time() + self.config.judge_window_s,
         )
         self._add_judge_usage(ruling["usage"])
         message = {
@@ -549,7 +553,7 @@ class Episode:
             "host_random": self._host_random(),
         }
         self.current_phase = "judge"
-        ruling = await asyncio.wait_for(
+        ruling = await bounded(
             adjudicate(
                 self.board,
                 turn_record=turn_record,
@@ -557,7 +561,7 @@ class Episode:
                 turns_max=self.config.turns_max,
                 judge=self.judge,
             ),
-            timeout=self.config.judge_window_s,
+            deadline=asyncio.get_running_loop().time() + self.config.judge_window_s,
         )
         self._add_judge_usage(ruling["usage"])
         turn_record["ruling"] = ruling

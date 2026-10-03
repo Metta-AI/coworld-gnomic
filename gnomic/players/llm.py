@@ -8,7 +8,6 @@ blindly reused as the final vote.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -52,12 +51,12 @@ PERSONAS = {
 
 
 class ActionOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     action: str = Field(min_length=1, max_length=2_000)
 
 
 class ProposalOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     kind: str
     text: str | None = Field(default=None, min_length=1, max_length=2_000)
     rule_id: int | None = None
@@ -73,7 +72,7 @@ class ProposalOutput(BaseModel):
 
 
 class DebateOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     adoption_outcome: str = Field(min_length=1, max_length=600)
     rejection_outcome: str = Field(min_length=1, max_length=600)
     game_ends_if_adopted: bool
@@ -97,7 +96,7 @@ class DebateOutput(BaseModel):
 
 
 class VoteOutput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     adoption_outcome: str = Field(min_length=1, max_length=600)
     rejection_outcome: str = Field(min_length=1, max_length=600)
     game_ends_if_adopted: bool
@@ -240,8 +239,8 @@ class OpusPolicy:
         self.vote_intents: dict[int, str] = {}
         self.usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
 
-    def _invoke(self, system: str, prompt: str) -> str:
-        payload = asyncio.run(complete_native(
+    async def _invoke(self, system: str, prompt: str) -> str:
+        payload = await complete_native(
             {
                 "max_tokens": self.max_tokens,
                 "temperature": 1,
@@ -254,15 +253,12 @@ class OpusPolicy:
             purpose="learner",
             slot=self.seat,
             timeout=120,
-        ))
+        )
         self.usage["calls"] += 1
         self.usage["input_tokens"] += payload.usage.input_tokens
         self.usage["output_tokens"] += payload.usage.output_tokens
         if not payload.text:
-            raise ValueError(
-                "model returned no text content "
-                f"(stop_reason={payload.stop_reason!r}, output_tokens={payload.usage.output_tokens!r})"
-            )
+            raise ValueError("model returned no text content")
         return payload.text
 
     @staticmethod
@@ -282,7 +278,7 @@ class OpusPolicy:
         repair = ""
         for attempt in range(2):
             try:
-                text = await asyncio.to_thread(self._invoke, system, prompt + repair)
+                text = await self._invoke(system, prompt + repair)
                 return model.model_validate(
                     normalize_model_payload(self._json(text), model)
                 )

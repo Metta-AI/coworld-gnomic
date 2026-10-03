@@ -12,14 +12,24 @@ import json
 
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from .channel import QueueChannelMixin, SeatChannel
+from gnomic.lifecycle import settle
+from gnomic.llm_transport import ReceivedHeaderPairs
+
+from .channel import QueueChannelMixin
 
 
-class WebSocketSeatChannel(QueueChannelMixin, SeatChannel):
+class WebSocketSeatChannel(QueueChannelMixin):
     def __init__(self, seat: int, websocket: WebSocket) -> None:
         self.seat = seat
         self.ws = websocket
         self.connected = True
+        self.progress = {}
+        self.active_rid = -1
+        self.stop_id: str | None = None
+        self.stop_deadline = 0.0
+        self.stopped = asyncio.Event()
+        self.sealed = False
+        self.received_headers: dict[int, dict[str, ReceivedHeaderPairs]] = {}
         self._queue: asyncio.Queue[dict] = asyncio.Queue()
         self._reader = asyncio.create_task(self._read_loop())
 
@@ -31,7 +41,7 @@ class WebSocketSeatChannel(QueueChannelMixin, SeatChannel):
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
                     continue  # unparseable frames are a no-op
-                if isinstance(msg, dict):
+                if isinstance(msg, dict) and not self.consume_progress(msg):
                     clean = self.private_receive(msg)
                     if clean is not None:
                         await self._queue.put(clean)
@@ -46,6 +56,9 @@ class WebSocketSeatChannel(QueueChannelMixin, SeatChannel):
         except (WebSocketDisconnect, RuntimeError):
             self.connected = False
 
-    def close_reader(self) -> None:
-        if not self._reader.done():
-            self._reader.cancel()
+    async def close_reader(self) -> None:
+        deadline = asyncio.get_running_loop().time() + 2
+        if not await settle({self._reader}, deadline, cancel=True):
+            raise RuntimeError("channel reader ownership remains unresolved")
+        if not self._reader.cancelled():
+            self._reader.result()

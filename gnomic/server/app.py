@@ -6,18 +6,24 @@ import asyncio
 import hashlib
 import json
 import os
-import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import uvicorn
 from fastapi import FastAPI, Response, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
+from gnomic.lifecycle import (
+    CLEANUP_SECONDS,
+    main_owned,
+    owned_children,
+    settle,
+    shutdown_deadline,
+)
 from gnomic.training import validate_capture_environment, write_private_episode
 
-from .channel import NullSeatChannel, SeatChannel
+from .channel import NullSeatChannel, SeatChannel, settle_channels
 from .config import GameConfig
 from .episode import Episode
 from .io import artifact_method, maybe_decompress, read_data, write_data
@@ -50,6 +56,15 @@ class GameServer:
         self.spectators: set[WebSocket] = set()
         self.server: uvicorn.Server | None = None
         self._start_lock = asyncio.Lock()
+        self.start_task: asyncio.Task | None = None
+        self.stopping = False
+        self.private_written = False
+        self.registered_channels: list[SeatChannel] = []
+        self.owner_deadline: float | None = None
+        self.cleanup_task: asyncio.Task[bool] | None = None
+        self.episode_task: asyncio.Task | None = None
+        self.ownership_joined = False
+        self.native_owned_tasks: set[asyncio.Task] = set()
 
         if self.replay_mode:
             raw = maybe_decompress(read_data(os.environ["COGAME_LOAD_REPLAY_URI"]))
@@ -84,19 +99,17 @@ class GameServer:
 
     async def maybe_start(self) -> None:
         async with self._start_lock:
-            if self.started or self.config is None:
+            if self.stopping or self.started or self.config is None:
                 return
             if len(self.channels) == self.config.seat_count():
-                self.started = True
-                self.run_task = asyncio.create_task(self._run())
+                self._start_episode()
 
     async def start_after_timeout(self) -> None:
         assert self.config is not None
         await asyncio.sleep(self.config.player_connect_timeout_seconds)
         async with self._start_lock:
-            if not self.started:
-                self.started = True
-                self.run_task = asyncio.create_task(self._run())
+            if not self.stopping and not self.started:
+                self._start_episode()
 
     def _episode_channels(self) -> list[SeatChannel]:
         assert self.config is not None
@@ -105,62 +118,166 @@ class GameServer:
             for seat in range(self.config.seat_count())
         ]
 
-    async def _run(self) -> None:
+    def _start_episode(self) -> None:
         assert self.config is not None
-        channels = self._episode_channels()
+        self.started = True
         self.episode = Episode(
-            self.config, channels, seed=self._seed(), broadcast=self.broadcast
+            self.config,
+            self._episode_channels(),
+            seed=self._seed(),
+            broadcast=self.broadcast,
         )
-        status = "failed"
-        try:
-            self.results, self.replay = await asyncio.wait_for(
-                self.episode.run(), timeout=self.config.episode_timeout_seconds
+        self.run_task = asyncio.create_task(self._run())
+
+    def request_stop(self) -> None:
+        if self.stopping:
+            return
+        self.stopping = True
+        if self.owner_deadline is None:
+            self.owner_deadline = asyncio.get_running_loop().time() + CLEANUP_SECONDS
+            inherited = shutdown_deadline.get()
+            if inherited is not None and inherited[0] is not None:
+                self.owner_deadline = min(self.owner_deadline, inherited[0])
+        for task in (self.start_task, self.run_task):
+            if task is not None and not task.done():
+                task.cancel()
+
+    async def _settle_ownership(self) -> bool:
+        if self.owner_deadline is None:
+            self.owner_deadline = asyncio.get_running_loop().time() + CLEANUP_SECONDS
+        deadline = self.owner_deadline
+        registered = list(self.registered_channels)
+        # In-process fixtures and collectors register channels without a WS route.
+        registered.extend(c for c in self.channels.values() if c not in registered)
+        channel_owner = asyncio.create_task(settle_channels(registered, deadline))
+        engine_tasks = set(self.native_owned_tasks)
+        if self.episode_task is not None:
+            engine_tasks.add(self.episode_task)
+        engine_joined = await settle(engine_tasks, deadline, cancel=True)
+        engine_joined = (
+            await settle(set(self.native_owned_tasks), deadline, cancel=True)
+            and engine_joined
+        )
+        channel_joined = await settle({channel_owner}, deadline, cancel=False)
+        if not channel_joined:
+            for channel in registered:
+                channel.seal()
+            await settle({channel_owner}, deadline, cancel=True)
+        self.ownership_joined = (
+            engine_joined
+            and channel_joined
+            and (
+                not channel_owner.cancelled()
+                and channel_owner.exception() is None
+                and channel_owner.result()
             )
-            status = "completed"
+        )
+        return self.ownership_joined
+
+    async def _join_ownership(self) -> bool:
+        if self.cleanup_task is None:
+            self.cleanup_task = asyncio.create_task(self._settle_ownership())
+        assert self.owner_deadline is not None or self.cleanup_task is not None
+        # The cleanup task itself owns the single deadline, not its callers.
+        if self.owner_deadline is None:
+            self.owner_deadline = asyncio.get_running_loop().time() + CLEANUP_SECONDS
+        done, _ = await asyncio.wait(
+            {self.cleanup_task},
+            timeout=max(0, self.owner_deadline - asyncio.get_running_loop().time()),
+        )
+        if not done:
+            for channel in self.registered_channels:
+                channel.seal()
+            self.ownership_joined = False
+            return False
+        return self.cleanup_task.result()
+
+    async def stop(self) -> None:
+        self.request_stop()
+        assert self.owner_deadline is not None
+        await self._join_ownership()
+        tasks = {t for t in (self.start_task, self.run_task) if t is not None}
+        joined = await settle(tasks, self.owner_deadline, cancel=True)
+        self.ownership_joined = self.ownership_joined and joined
+        if not self.ownership_joined:
+            self.results = self.replay = None
+        if self.started and not self.private_written:
+            assert self.episode is not None
+            self._write_interrupted()
+
+    def _write_private(
+        self,
+        status: Literal["completed", "failed", "truncated"],
+        failure_kind: str | None = None,
+    ) -> None:
+        assert self.episode is not None
+        if not self.private_written and "COGAME_SAVE_TRAJECTORY_URI" in os.environ:
+            record = self.episode.capture.finish(
+                status=status,
+                failure_kind=failure_kind,
+                ownership_joined=self.ownership_joined,
+            )
+            write_private_episode(os.environ["COGAME_SAVE_TRAJECTORY_URI"], record)
+            self.private_written = True
+
+    def _write_interrupted(self) -> None:
+        self._write_private("truncated", "ownership-interrupted")
+
+    async def _run(self) -> None:
+        assert self.config is not None and self.episode is not None
+        channels = self._episode_channels()
+        try:
+            token = owned_children.set(self.native_owned_tasks)
+            self.episode_task = asyncio.create_task(self.episode.run())
+            owned_children.reset(token)
+            done, _ = await asyncio.wait(
+                {self.episode_task}, timeout=self.config.episode_timeout_seconds
+            )
+            if not done:
+                raise TimeoutError("episode deadline exceeded")
+            self.results, self.replay = self.episode_task.result()
+            if not await self._join_ownership():
+                self.results = self.replay = None
+                self._write_interrupted()
+                raise RuntimeError("episode ownership remains unresolved")
+            private = self.episode.capture.finish()
+            if private.episode.status != "completed":
+                self.results = self.replay = None
+                self._write_interrupted()
+                raise RuntimeError("private episode has unresolved native ownership")
+            self._write_private("completed")
             self._write_artifacts()
             await asyncio.gather(
                 *(
-                    channel.send({"type": "final", "scores": self.results["scores"]})
-                    for channel in channels
+                    c.send({"type": "final", "scores": self.results["scores"]})
+                    for c in channels
                 )
             )
             await self.broadcast({"type": "final", "scores": self.results["scores"]})
             self.done = True
             await asyncio.sleep(1)
         except Exception as exc:
-            self.fatal_error = f"{type(exc).__name__}: {exc}"
+            await self._join_ownership()
+            self.results = self.replay = None
+            self.fatal_error = type(exc).__name__
             self.done = True
-            try:
-                self._write_operator_log()
-            except Exception as log_exc:
-                self.fatal_error += (
-                    f"; operator log write failed: {type(log_exc).__name__}: {log_exc}"
-                )
+            self._write_private(
+                "failed" if self.ownership_joined else "truncated", type(exc).__name__
+            )
+            self._write_operator_log()
             await self.broadcast({"type": "fatal_error", "error": self.fatal_error})
-            # Deliberately leave result/replay artifacts absent: a production judge
-            # outage is an episode failure, not a mechanical game with different law.
         finally:
-            if "COGAME_SAVE_TRAJECTORY_URI" in os.environ:
-                failure = sys.exception()
-                write_private_episode(
-                    os.environ["COGAME_SAVE_TRAJECTORY_URI"],
-                    self.episode.capture.finish(
-                        status=status,
-                        failure_kind=type(failure).__name__
-                        if failure is not None
-                        else self.fatal_error,
-                    ),
-                )
-            # Hold the server up until /global spectators disconnect (capped).
-            # The hosted certification probe connects to /global before the
-            # episode starts but pings only after it observes every player pod
-            # started; a fast episode that exits at done wins that race and the
-            # probe sees a dead socket ("no close frame received or sent",
-            # certification of 0.2.2, cow_b12a3042). With no spectators the
-            # loop is a no-op, so ordinary episodes exit as promptly as before.
+            await self._join_ownership()
+            if self.stopping and not self.private_written:
+                self._write_interrupted()
             if self.server is not None:
-                deadline = asyncio.get_event_loop().time() + SPECTATOR_DRAIN_SECONDS
-                while self.spectators and asyncio.get_event_loop().time() < deadline:
+                deadline = asyncio.get_running_loop().time() + SPECTATOR_DRAIN_SECONDS
+                while (
+                    not self.stopping
+                    and self.ownership_joined
+                    and self.spectators
+                    and asyncio.get_running_loop().time() < deadline
+                ):
                     await asyncio.sleep(0.2)
                 self.server.should_exit = True
 
@@ -216,8 +333,11 @@ def build_app(game: GameServer) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         if not game.replay_mode:
-            asyncio.create_task(game.start_after_timeout())
-        yield
+            game.start_task = asyncio.create_task(game.start_after_timeout())
+        try:
+            yield
+        finally:
+            await game.stop()
 
     app = FastAPI(lifespan=lifespan)
 
@@ -250,10 +370,14 @@ def build_app(game: GameServer) -> FastAPI:
             await websocket.close(code=1008)
             return
         await websocket.accept()
+        if game.stopping or game.cleanup_task is not None:
+            await websocket.close(code=1008)
+            return
         channel = WebSocketSeatChannel(seat, websocket)
+        game.registered_channels.append(channel)
         prior = game.channels.get(seat)
         if prior is not None:
-            prior.close_reader()
+            await prior.close_reader()
         game.channels[seat] = channel
         await _snapshot(game, channel, seat)
         await game.maybe_start()
@@ -261,7 +385,8 @@ def build_app(game: GameServer) -> FastAPI:
             while channel.connected and not game.done:
                 await asyncio.sleep(0.2)
         finally:
-            channel.close_reader()
+            if game.cleanup_task is None:
+                await channel.close_reader()
 
     @app.websocket("/global")
     async def global_ws(websocket: WebSocket) -> None:
@@ -313,10 +438,28 @@ def main() -> None:
         host=os.environ.get("COGAME_HOST", "0.0.0.0"),
         port=int(os.environ.get("COGAME_PORT", "8080")),
         log_level=os.environ.get("LOG_LEVEL", "info").lower(),
+        ws_max_size=16 * 1024 * 1024,
     )
-    server = uvicorn.Server(config)
+
+    class OwnedServer(uvicorn.Server):
+        @contextmanager
+        def capture_signals(self):
+            # main_owned owns first/repeated signals and the finite cleanup budget.
+            yield
+
+    config.timeout_graceful_shutdown = 2
+    server = OwnedServer(config)
     game.server = server
-    server.run()
+
+    async def serve_owned() -> None:
+        try:
+            await server.serve()
+        finally:
+            await game.stop()
+
+    main_owned(serve_owned(), game.request_stop)
+    if game.started and not game.ownership_joined:
+        raise SystemExit("game ownership did not settle")
     if game.fatal_error:
         raise SystemExit(game.fatal_error)
 

@@ -10,8 +10,8 @@
 The harness owns transport, reconnects, deadlines, and clean exit. A callback
 that raises or overruns its window sends NO reply — the server applies the phase
 default and marks it ``default: true`` (never fabricate an action client-side).
-Run ``python -m gnomic.players.conformance your_module:YourPolicy`` before
-submitting: zero unintended defaults is the admission gate.
+Pure source-owned baseline callbacks return values directly; native callbacks are
+asynchronous. The SDK and native whole-game tests enforce production parser parity.
 """
 
 from __future__ import annotations
@@ -19,14 +19,16 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import inspect
 import json
 import os
 import sys
 import time
-from contextvars import copy_context
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
+from gnomic.lifecycle import OwnershipUnsettled, bounded, main_owned, player_loop
 from gnomic.llm_transport import AttemptPublisher, LearnerWindow, current_window
 
 from ..protocol import make_reply
@@ -142,19 +144,19 @@ class Policy:
     """Override the five decision callbacks. Raising or overrunning a window is
     safe (the server defaults) but fails the conformance gate."""
 
-    def introduce(self, view: GameView) -> str:
+    def introduce(self, view: GameView) -> str | Coroutine[Any, Any, str]:
         raise NotImplementedError
 
-    def action(self, view: GameView) -> str:
+    def action(self, view: GameView) -> str | Coroutine[Any, Any, str]:
         raise NotImplementedError
 
-    def propose(self, view: GameView) -> dict:
+    def propose(self, view: GameView) -> dict | Coroutine[Any, Any, dict]:
         raise NotImplementedError
 
-    def debate(self, view: GameView) -> dict:
+    def debate(self, view: GameView) -> dict | Coroutine[Any, Any, dict]:
         raise NotImplementedError
 
-    def vote(self, view: GameView) -> str:
+    def vote(self, view: GameView) -> str | Coroutine[Any, Any, str]:
         raise NotImplementedError
 
     def on_message(self, view: GameView, raw: dict) -> None:
@@ -172,7 +174,7 @@ class DefaultEvent:
 
 
 class Transport:
-    async def recv(self) -> dict:  # pragma: no cover - interface
+    async def recv(self) -> dict | None:  # pragma: no cover - interface
         raise NotImplementedError
 
     async def send(self, message: dict) -> None:  # pragma: no cover - interface
@@ -188,7 +190,7 @@ class InProcessTransport(Transport):
     def __init__(self, channel: Any) -> None:
         self.channel = channel
 
-    async def recv(self) -> dict:
+    async def recv(self) -> dict | None:
         return await self.channel.player_recv()
 
     async def send(self, message: dict) -> None:
@@ -203,12 +205,12 @@ class WebSocketTransport(Transport):
     async def connect(self) -> None:
         import websockets
 
-        self.ws = await websockets.connect(self.url, max_size=8 * 1024 * 1024)
+        self.ws = await websockets.connect(self.url, max_size=16 * 1024 * 1024)
 
-    async def recv(self) -> dict:
+    async def recv(self) -> dict | None:
         assert self.ws is not None
-        raw = await self.ws.recv()
-        return json.loads(raw)
+        raw = await anext(self.ws.__aiter__(), None)
+        return None if raw is None else json.loads(raw)
 
     async def send(self, message: dict) -> None:
         assert self.ws is not None
@@ -229,10 +231,11 @@ class PlayerSession:
         self.view = GameView()
         self.defaults: list[DefaultEvent] = []
         self.final: dict | None = None
+        self.stopped = False
+        self.cleanup_deadline = float("inf")
 
     async def _callback(self, phase: str, timeout_s: float) -> Any:
-        """Run a sync policy callback in an executor under the window's deadline."""
-        loop = asyncio.get_event_loop()
+        """Await native policy work under its owned absolute decision deadline."""
         budget = max(0.1, timeout_s - REPLY_MARGIN_S)
         fn = getattr(self.policy, phase)
         view = copy.deepcopy(self.view)
@@ -241,21 +244,22 @@ class PlayerSession:
             view.seat, type(self.policy).__name__, time.monotonic() + budget, publish
         )
         token = current_window.set(window)
-        context = copy_context()
         try:
-            return await asyncio.wait_for(
-                loop.run_in_executor(None, lambda: context.run(fn, view)),
-                timeout=budget,
-            )
+            if inspect.iscoroutinefunction(fn):
+                return await bounded(
+                    fn(view), asyncio.get_running_loop().time() + budget
+                )
+            return fn(view)
         except TimeoutError:
             self.defaults.append(DefaultEvent(view.turn, phase, "timeout"))
         except Exception as e:  # noqa: BLE001 - existing callback boundary applies engine defaults
+            if isinstance(e, OwnershipUnsettled):
+                raise
             self.defaults.append(
-                DefaultEvent(view.turn, phase, f"exception: {type(e).__name__}: {e}")
+                DefaultEvent(view.turn, phase, f"exception: {type(e).__name__}")
             )
         finally:
             current_window.reset(token)
-            await publish.drain()
         return None
 
     async def handle(self, msg: dict) -> None:
@@ -324,17 +328,18 @@ class PlayerSession:
                 await self.transport.send(make_reply(msg["rid"], {"vote": vote}))
             elif vote is not None:
                 self.defaults.append(
-                    DefaultEvent(self.view.turn, "vote", f"invalid return {vote!r}")
+                    DefaultEvent(self.view.turn, "vote", "invalid vote return")
                 )
         elif mtype == "final":
             self.final = msg
 
     async def run(self) -> None:
         """Consume messages until `final`. Treat any close after `final` as clean."""
-        while self.final is None:
-            msg = await self.transport.recv()
-            if isinstance(msg, dict):
-                await self.handle(msg)
+        exit_state = await player_loop(
+            self.transport.recv, self.transport.send, self.handle
+        )
+        self.stopped = exit_state.kind == "stopped"
+        self.cleanup_deadline = exit_state.cleanup_deadline
 
 
 async def run_ws_player(
@@ -344,7 +349,7 @@ async def run_ws_player(
     url = url or os.environ["COWORLD_PLAYER_WS_URL"]
     session = PlayerSession(policy, WebSocketTransport(url))
     attempt = 0
-    while session.final is None:
+    while session.final is None and not session.stopped:
         transport = WebSocketTransport(url)
         try:
             await transport.connect()
@@ -352,17 +357,19 @@ async def run_ws_player(
             session.transport = transport
             await session.run()
         except Exception as e:
+            if isinstance(e, OwnershipUnsettled):
+                raise
             attempt += 1
             if attempt >= max_attempts:
                 print(
-                    f"[sdk] giving up after {attempt} connection failures: {e}",
+                    f"[sdk] giving up after {attempt} connection failures: {type(e).__name__}",
                     file=sys.stderr,
                     flush=True,
                 )
                 raise
             await asyncio.sleep(min(5.0, 0.5 * attempt))
         finally:
-            await transport.close()
+            await bounded(transport.close(), asyncio.get_running_loop().time() + 1)
     for event in session.defaults:
         print(
             f"[sdk] defaulted turn={event.turn} phase={event.phase}: {event.reason}",
@@ -373,4 +380,4 @@ async def run_ws_player(
 
 def main_for(policy_factory) -> None:
     """Entrypoint helper for player containers."""
-    asyncio.run(run_ws_player(policy_factory()))
+    main_owned(run_ws_player(policy_factory()))
