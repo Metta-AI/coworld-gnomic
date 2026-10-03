@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import os
@@ -21,7 +22,7 @@ from .protocol import parse_reply_text
 
 
 class RequestWindow(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     request: dict[str, JsonValue]
     observation: JsonValue
     prompt: list[dict[str, str]]
@@ -34,7 +35,7 @@ class RequestWindow(BaseModel):
 
 
 class Decision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     schema_version: Literal["1"] = "1"
     event_type: Literal["decision"] = "decision"
     episode_id: str
@@ -43,6 +44,7 @@ class Decision(BaseModel):
     game: Literal["gnomic"] = "gnomic"
     game_version: str
     source_revision: str
+    image_digest: str | None = None
     seat: str
     visibility: Literal["private"] = "private"
     observation: JsonValue
@@ -57,7 +59,7 @@ class Decision(BaseModel):
 
 
 class EpisodeRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     schema_version: Literal["1"] = "1"
     event_type: Literal["episode"] = "episode"
     episode_id: str
@@ -65,13 +67,14 @@ class EpisodeRecord(BaseModel):
     game: Literal["gnomic"] = "gnomic"
     game_version: str
     source_revision: str
+    image_digest: str | None = None
     status: Literal["completed", "failed", "truncated"]
     outcome: JsonValue
     participant_outcomes: JsonValue
 
 
 class TrainingEpisode(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     schema_version: Literal["1"] = "1"
     episode: EpisodeRecord
     decisions: list[Decision]
@@ -87,6 +90,8 @@ class Capture:
         self.ingress_issues: list[str] = []
 
     def delivered(self, seat: int, message: dict) -> None:
+        if self.sealed:
+            raise RuntimeError("decision delivery after private seal")
         self.views[seat].fold(copy.deepcopy(message))
         if "rid" in message:
             key = (seat, message["rid"])
@@ -122,9 +127,11 @@ class Capture:
             ):
                 self.ingress_issues.append("started-request-mutated")
                 return None
-            if (
-                started.raw_response is not None
-                and started.raw_response != attempt.raw_response
+            if started.response_body_b64 is not None and (
+                attempt.response_body_b64 is None
+                or not base64.b64decode(
+                    attempt.response_body_b64, validate=True
+                ).startswith(base64.b64decode(started.response_body_b64, validate=True))
             ):
                 self.ingress_issues.append("received-body-mutated")
                 return None
@@ -140,6 +147,8 @@ class Capture:
     def consumed(
         self, seat: int, rid: int, raw: dict | None, action: dict, fallback: bool
     ) -> None:
+        if self.sealed:
+            raise RuntimeError("engine action after private seal")
         window = self.windows[(seat, rid)]
         window.submitted = copy.deepcopy(raw)
         window.executed = copy.deepcopy(action)
@@ -169,8 +178,9 @@ class Capture:
     def finish(
         self,
         *,
-        status: Literal["completed", "failed"] = "completed",
+        status: Literal["completed", "failed", "truncated"] = "completed",
         failure_kind: str | None = None,
+        ownership_joined: bool | None = None,
     ) -> TrainingEpisode:
         from .server.episode import Episode
 
@@ -182,12 +192,19 @@ class Capture:
             attempts = [a.model_copy(deep=True) for a in window.attempts.values()]
             selected = None
             for attempt in attempts:
-                incomplete |= attempt.origin == "model" and attempt.latency_ms is None
+                incomplete |= attempt.origin == "model" and (
+                    attempt.latency_ms is None
+                    or attempt.response_complete is False
+                    or attempt.response_reader_joined is False
+                )
                 if attempt.origin == "teacher":
                     selected = attempt
                     continue
                 if attempt.origin == "model" and (
-                    attempt.raw_response is None or attempt.platform_call_id is None
+                    attempt.raw_response is None
+                    or attempt.platform_call_id is None
+                    or attempt.response_complete is not True
+                    or attempt.response_reader_joined is not True
                 ):
                     attempt.rejection_reason = "missing-native-response-provenance"
                     continue
@@ -242,6 +259,7 @@ class Capture:
                     decision_index=len(decisions),
                     game_version=os.environ["COWORLD_GAME_VERSION"],
                     source_revision=os.environ["COWORLD_SOURCE_REVISION"],
+                    image_digest=os.environ.get("COWORLD_GAME_IMAGE_DIGEST"),
                     seat=str(seat),
                     observation={
                         "view": window.observation,
@@ -271,13 +289,19 @@ class Capture:
                 seed_family=f"gnomic-{ep.seed}",
                 game_version=os.environ["COWORLD_GAME_VERSION"],
                 source_revision=os.environ["COWORLD_SOURCE_REVISION"],
+                image_digest=os.environ.get("COWORLD_GAME_IMAGE_DIGEST"),
                 status=completion,
                 participant_outcomes={str(s): {"score": scores[s]} for s in range(3)},
                 outcome={
                     "results": ep.results,
                     "config": ep.config.model_dump(exclude={"tokens"}),
                     "failure_kind": failure_kind,
+                    "ownership_joined": ownership_joined,
                     "ingress_issues": self.ingress_issues,
+                    "received_header_pairs": [
+                        {"seat": c.seat, "records": c.received_header_records()}
+                        for c in ep.channels
+                    ],
                     "environment_policy": {
                         "mode": ep.config.judge_mode,
                         "model": ep.config.judge_model,

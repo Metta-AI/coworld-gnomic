@@ -18,6 +18,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from gnomic.lifecycle import OwnershipUnsettled
 from gnomic.llm_transport import Attempt, complete_native
 
 from .engine import SEAT_COUNT, Board, OperationError
@@ -31,7 +32,7 @@ class JudgeError(RuntimeError):
 
 
 class RuleOp(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     op: Literal["enact", "amend", "repeal", "transmute"]
     rule_id: int | None = None
     text: str | None = Field(default=None, max_length=2_000)
@@ -50,7 +51,7 @@ class RuleOp(BaseModel):
 
 
 class StateOp(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     op: Literal["set", "delete", "increment"] = "set"
     scope: Literal["common", "player"]
     seat: int | None = Field(default=None, ge=0, lt=SEAT_COUNT)
@@ -67,7 +68,7 @@ class StateOp(BaseModel):
 
 
 class Ruling(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     valid: bool
     adopted: bool
     summary: str = Field(min_length=1, max_length=800)
@@ -91,7 +92,7 @@ class Ruling(BaseModel):
 
 
 class ActionRuling(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(hide_input_in_errors=True, extra="forbid")
     valid: bool
     summary: str = Field(min_length=1, max_length=800)
     state_ops: list[StateOp] = Field(default_factory=list, max_length=24)
@@ -274,7 +275,7 @@ class LlmJudge:
             )
         self.generations: list[Attempt] = []
 
-    def _invoke(
+    async def _invoke(
         self, messages: list[dict[str, Any]], *, system: str = JUDGE_SYSTEM
     ) -> tuple[str, dict[str, int]]:
         body = {
@@ -286,13 +287,13 @@ class LlmJudge:
             "output_config": {"effort": "high"},
             "messages": messages,
         }
-        payload = asyncio.run(complete_native(
+        payload = await complete_native(
             body,
             self.model_id,
             purpose="environment",
             timeout=120,
             generations=self.generations,
-        ))
+        )
         return payload.text, {
             "input_tokens": payload.usage.input_tokens,
             "output_tokens": payload.usage.output_tokens,
@@ -308,9 +309,7 @@ class LlmJudge:
         for attempt in range(2):
             started = time.monotonic()
             try:
-                text, usage = await asyncio.to_thread(
-                    self._invoke, messages
-                )
+                text, usage = await self._invoke(messages)
                 totals["calls"] += 1
                 totals["input_tokens"] += usage["input_tokens"]
                 totals["output_tokens"] += usage["output_tokens"]
@@ -363,6 +362,8 @@ class LlmJudge:
                     )
                     continue
             except Exception as exc:
+                if isinstance(exc, OwnershipUnsettled):
+                    raise
                 last_error = exc
                 totals["latency_ms"] += round((time.monotonic() - started) * 1_000)
                 if attempt == 0:
@@ -398,11 +399,7 @@ class LlmJudge:
         for attempt in range(2):
             started = time.monotonic()
             try:
-                text, usage = await asyncio.to_thread(
-                    self._invoke,
-                    messages,
-                    system=ACTION_JUDGE_SYSTEM,
-                )
+                text, usage = await self._invoke(messages, system=ACTION_JUDGE_SYSTEM)
                 totals["calls"] += 1
                 totals["input_tokens"] += usage["input_tokens"]
                 totals["output_tokens"] += usage["output_tokens"]
@@ -433,6 +430,8 @@ class LlmJudge:
                     )
                     continue
             except Exception as exc:
+                if isinstance(exc, OwnershipUnsettled):
+                    raise
                 last_error = exc
                 totals["latency_ms"] += round((time.monotonic() - started) * 1_000)
                 if attempt == 0:

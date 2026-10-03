@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import time
 from typing import Any
@@ -15,11 +14,11 @@ from .sdk import GameView, Policy, main_for
 
 
 class NativePolicy(Policy):
-    def _reply(self, view: GameView) -> dict[str, Any]:
+    async def _reply(self, view: GameView) -> dict[str, Any]:
         window = current_window.get()
         messages = messages_for(view)
-        text = asyncio.run(
-            complete_native(
+        text = (
+            await complete_native(
                 {
                     "system": messages[0]["content"],
                     "messages": messages[1:],
@@ -42,26 +41,26 @@ class NativePolicy(Policy):
             raise ValueError("Model reply has the wrong request id")
         return reply
 
-    def introduce(self, view: GameView) -> str:
-        name = self._reply(view)["name"]
+    async def introduce(self, view: GameView) -> str:
+        name = (await self._reply(view))["name"]
         if not isinstance(name, str) or not name.strip():
             raise ValueError("Model gnome name must be nonempty text")
         return name
 
-    def action(self, view: GameView) -> str:
-        action = self._reply(view)["action"]
+    async def action(self, view: GameView) -> str:
+        action = (await self._reply(view))["action"]
         if not isinstance(action, str) or not action.strip():
             raise ValueError("Model action must be nonempty text")
         return action
 
-    def propose(self, view: GameView) -> dict:
-        proposal = self._reply(view)["proposal"]
+    async def propose(self, view: GameView) -> dict:
+        proposal = (await self._reply(view))["proposal"]
         if not isinstance(proposal, dict):
             raise ValueError("Model proposal must be an object")
         return proposal
 
-    def debate(self, view: GameView) -> dict:
-        reply = self._reply(view)
+    async def debate(self, view: GameView) -> dict:
+        reply = await self._reply(view)
         if not isinstance(reply["text"], str) or reply["vote_intent"] not in {
             "aye",
             "nay",
@@ -69,8 +68,8 @@ class NativePolicy(Policy):
             raise ValueError("Model debate reply has invalid fields")
         return {"text": reply["text"], "vote_intent": reply["vote_intent"]}
 
-    def vote(self, view: GameView) -> str:
-        vote = self._reply(view)["vote"]
+    async def vote(self, view: GameView) -> str:
+        vote = (await self._reply(view))["vote"]
         if vote not in {"aye", "nay"}:
             raise ValueError("Model vote must be aye or nay")
         return vote

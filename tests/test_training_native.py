@@ -71,7 +71,8 @@ async def test_native_deadline_bounds_slow_response_body(monkeypatch):
         assert time.monotonic() - started < 1
         attempt = generations[0]
         assert attempt.platform_call_id is not None
-        assert attempt.raw_response is None
+        assert attempt.raw_response and attempt.response_complete is False
+        assert attempt.response_reader_joined is True
         assert attempt.latency_ms is not None
         assert not attempt.accepted
     finally:

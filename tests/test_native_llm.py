@@ -9,7 +9,7 @@ from gnomic.players.haiku_baseline import LlmClient
 from gnomic.players.llm import OpusPolicy
 
 
-def test_native_judge_and_players_route_without_aws_credentials(monkeypatch):
+async def test_native_judge_and_players_route_without_aws_credentials(monkeypatch):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -45,15 +45,21 @@ def test_native_judge_and_players_route_without_aws_credentials(monkeypatch):
     try:
         judge = LlmJudge("local-model")
         assert judge.model_id == "local-model"
-        assert judge._invoke([{"role": "user", "content": "proposal"}])[0] == "ok"
+        assert (await judge._invoke([{"role": "user", "content": "proposal"}]))[
+            0
+        ] == "ok"
         policy = OpusPolicy()
         assert policy.model == "anthropic/claude-sonnet-4.6"
-        assert policy._invoke("rules", "action") == "ok"
+        assert await policy._invoke("rules", "action") == "ok"
+
+        async def publish(attempt):
+            pass
+
         token = current_window.set(
-            LearnerWindow(1, "haiku", time.monotonic() + 5, lambda attempt: None)
+            LearnerWindow(1, "haiku", time.monotonic() + 5, publish)
         )
         try:
-            assert LlmClient().complete("rules", "action", max_tokens=64) == "ok"
+            assert await LlmClient().complete("rules", "action", max_tokens=64) == "ok"
         finally:
             current_window.reset(token)
     finally:

@@ -33,13 +33,13 @@ class FakeNative:
         )
 
 
-def test_opus_player_request_uses_adaptive_high_with_native_reasoning(
+async def test_opus_player_request_uses_adaptive_high_with_native_reasoning(
     monkeypatch,
 ) -> None:
     fake = FakeNative()
     monkeypatch.setattr("gnomic.players.llm.complete_native", fake.complete)
     policy = OpusPolicy("ivan")
-    assert policy._invoke("system", "prompt") == '{"kind":"enact"}'
+    assert await policy._invoke("system", "prompt") == '{"kind":"enact"}'
     assert fake.body is not None
     assert fake.body["max_tokens"] == 32768
     assert fake.body["temperature"] == 1
