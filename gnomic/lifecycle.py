@@ -204,13 +204,13 @@ async def run_owned(
 
 
 def main_owned(
-    work: Coroutine[Any, Any, Any], on_stop: Callable[[], None] | None = None
-) -> None:
+    work: Coroutine[Any, Any, T], on_stop: Callable[[], None] | None = None
+) -> T | None:
     """Do not invoke asyncio.run's unbounded cancellation sweep on failed ownership."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(run_owned(work, on_stop))
+        return loop.run_until_complete(run_owned(work, on_stop))
     finally:
         loop.close()
         asyncio.set_event_loop(None)
