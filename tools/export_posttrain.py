@@ -128,6 +128,7 @@ def main() -> None:
     manifest = json.loads((ROOT / "coworld_manifest_template.json").read_text())
     args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
     runs = []
+    decision_count = 0
     for variant in manifest["variants"]:
         config = {
             **variant["game_config"],
@@ -162,6 +163,7 @@ def main() -> None:
                     "decisions": len(episode.decisions),
                 }
             )
+            decision_count += len(episode.decisions)
     summary = {
         "source_revision": source,
         "game_version": os.environ["COWORLD_GAME_VERSION"],
@@ -178,7 +180,7 @@ def main() -> None:
         "w",
     ) as output:
         output.write(json.dumps(summary, indent=2) + "\n")
-    print(f"whole_games={len(runs)} decisions={sum(r['decisions'] for r in runs)}")
+    print(f"whole_games={len(runs)} decisions={decision_count}")
 
 
 if __name__ == "__main__":
