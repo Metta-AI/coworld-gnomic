@@ -7,8 +7,23 @@ import random
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ..engine import Board, HOST_CONSTRAINTS, SEAT_COUNT, default_action, default_proposal
-from ..judge import LlmJudge, DeterministicJudge, Judge, adjudicate, adjudicate_action
+from ..engine import (
+    HOST_CONSTRAINTS,
+    SEAT_COUNT,
+    Board,
+    default_action,
+    default_proposal,
+)
+from ..judge import (
+    ACTION_JUDGE_SYSTEM,
+    JUDGE_SYSTEM,
+    DeterministicJudge,
+    Judge,
+    LlmJudge,
+    adjudicate,
+    adjudicate_action,
+)
+from ..training import Capture
 from .channel import SeatChannel
 from .config import GameConfig
 
@@ -28,6 +43,7 @@ class Episode:
         *,
         seed: int,
         broadcast: Broadcast | None = None,
+        teacher_seats: frozenset[int] = frozenset(),
     ) -> None:
         self.config = config
         self.channels = channels
@@ -42,13 +58,52 @@ class Episode:
         self.current_phase = "lobby"
         self.winner_slots: list[int] = []
         self.termination = ""
-        self.judge_usage = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "latency_ms": 0}
+        self.judge_usage = {
+            "calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "latency_ms": 0,
+        }
         self.seat_names: list[str] = list(GNOME_SEAT_NAMES)
         self.judge: Judge = (
             DeterministicJudge()
             if config.judge_mode == "deterministic"
             else LlmJudge(config.judge_model)
         )
+        self.results: dict[str, Any] | None = None
+        self.judge_systems = {"ruling": JUDGE_SYSTEM, "action": ACTION_JUDGE_SYSTEM}
+        self.capture = Capture(self, teacher_seats=teacher_seats)
+        for channel in self.channels:
+            channel.private_receive = lambda packet, seat=channel.seat: (
+                self.capture.receive(seat, packet)
+            )
+
+    async def _send(self, channel: SeatChannel, message: dict) -> None:
+        self.capture.delivered(channel.seat, message)
+        await channel.send(message)
+
+    @staticmethod
+    def canonical_action(request: dict, seat: int, raw: dict | None) -> dict:
+        kind = request["type"]
+        if kind == "introduce_request":
+            return (
+                {"name": raw["name"].strip()[:40]}
+                if isinstance(raw, dict) and isinstance(raw.get("name"), str)
+                else {}
+            )
+        if kind in {"action_request", "action_repair_request"}:
+            action = Episode._parse_action(raw)
+            return {"action": action["text"]}
+        if kind == "proposal_request":
+            action = Episode._parse_proposal(raw, request["turn"])
+            return {"proposal": {k: v for k, v in action.items() if k != "default"}}
+        if kind == "debate_request":
+            action = Episode._parse_debate(seat, raw)
+            return {k: v for k, v in action.items() if k not in {"seat", "default"}}
+        if kind == "vote_request":
+            action = Episode._parse_vote(seat, raw)
+            return {"vote": action["vote"]}
+        raise ValueError("Unknown decision request")
 
     def _next_rid(self) -> int:
         self._rid += 1
@@ -73,22 +128,42 @@ class Episode:
 
         async def ask(channel: SeatChannel) -> str | None:
             rid = self._next_rid()
-            await channel.send({"type": "introduce_request", "rid": rid})
+            await self._send(channel, {"type": "lobby", "seat": channel.seat})
+            await self._send(
+                channel,
+                {
+                    "type": "introduce_request",
+                    "rid": rid,
+                    "timeout_s": self.config.introduce_window_s,
+                },
+            )
             reply = await channel.recv_reply(rid, self.config.introduce_window_s)
             name = reply.get("name") if isinstance(reply, dict) else None
+            self.capture.windows[(channel.seat, rid)].submitted = reply
             return name if isinstance(name, str) else None
 
         raw = await asyncio.gather(*(ask(channel) for channel in self.channels))
         used: dict[str, int] = {}
         names: list[str] = []
         for seat in range(SEAT_COUNT):
-            name = "".join(ch for ch in (raw[seat] or "").strip() if ch.isprintable())[:40].strip()
+            name = "".join(ch for ch in (raw[seat] or "").strip() if ch.isprintable())[
+                :40
+            ].strip()
             if not name:
                 name = GNOME_SEAT_NAMES[seat]
             count = used.get(name.lower(), 0) + 1
             used[name.lower()] = count
             names.append(name if count == 1 else f"{name} ({count})")
         self.seat_names = names
+        for (seat, rid), window in self.capture.windows.items():
+            if window.request["type"] == "introduce_request":
+                self.capture.consumed(
+                    seat,
+                    rid,
+                    window.submitted,
+                    {"name": names[seat]},
+                    raw[seat] is None,
+                )
 
     async def _emit(self, message: dict[str, Any]) -> None:
         self.events.append(message)
@@ -96,7 +171,9 @@ class Episode:
             await self._broadcast(message)
 
     async def _send_all(self, message: dict[str, Any]) -> None:
-        await asyncio.gather(*(channel.send(message) for channel in self.channels))
+        await asyncio.gather(
+            *(self._send(channel, message) for channel in self.channels)
+        )
 
     async def _announce_start(self) -> None:
         await self._collect_introductions()
@@ -106,7 +183,8 @@ class Episode:
             "limits": self.config.limits_payload(),
         }
         for seat, channel in enumerate(self.channels):
-            await channel.send(
+            await self._send(
+                channel,
                 {
                     "type": "game_start",
                     "session": session,
@@ -115,7 +193,7 @@ class Episode:
                     "rules": self.board.rules_dict(include_history=False),
                     "state": self.board.state.as_dict(),
                     "history": [],
-                }
+                },
             )
         await self._emit(
             {
@@ -150,7 +228,12 @@ class Episode:
         rule_id = payload.get("rule_id")
         rationale = payload.get("rationale", "")
         if kind == "enact" and isinstance(text, str) and 0 < len(text.strip()) <= 2_000:
-            return {"kind": kind, "text": text.strip(), "rationale": str(rationale)[:2_000], "default": False}
+            return {
+                "kind": kind,
+                "text": text.strip(),
+                "rationale": str(rationale)[:2_000],
+                "default": False,
+            }
         if (
             kind == "amend"
             and isinstance(rule_id, int)
@@ -183,7 +266,12 @@ class Episode:
     @staticmethod
     def _parse_debate(seat: int, raw: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(raw, dict) or not isinstance(raw.get("text"), str):
-            return {"seat": seat, "text": "No statement.", "vote_intent": "nay", "default": True}
+            return {
+                "seat": seat,
+                "text": "No statement.",
+                "vote_intent": "nay",
+                "default": True,
+            }
         intent = raw.get("vote_intent")
         if intent not in {"aye", "nay"}:
             intent = "nay"
@@ -198,7 +286,12 @@ class Episode:
     def _parse_vote(seat: int, raw: dict[str, Any] | None) -> dict[str, Any]:
         vote = raw.get("vote") if isinstance(raw, dict) else None
         if vote not in {"aye", "nay"}:
-            return {"seat": seat, "vote": "nay", "reason": "Invalid or missing vote.", "default": True}
+            return {
+                "seat": seat,
+                "vote": "nay",
+                "reason": "Invalid or missing vote.",
+                "default": True,
+            }
         return {
             "seat": seat,
             "vote": vote,
@@ -215,9 +308,19 @@ class Episode:
             "rid": rid,
             "timeout_s": self.config.proposal_window_s,
         }
-        await self.channels[proposer].send(request)
-        raw = await self.channels[proposer].recv_reply(rid, self.config.proposal_window_s)
-        return self._parse_proposal(raw, turn)
+        await self._send(self.channels[proposer], request)
+        raw = await self.channels[proposer].recv_reply(
+            rid, self.config.proposal_window_s
+        )
+        proposal = self._parse_proposal(raw, turn)
+        self.capture.consumed(
+            proposer,
+            rid,
+            raw,
+            {"proposal": {k: v for k, v in proposal.items() if k != "default"}},
+            proposal["default"],
+        )
+        return proposal
 
     def _add_judge_usage(self, usage: dict[str, Any]) -> None:
         for key in self.judge_usage:
@@ -244,9 +347,12 @@ class Episode:
         if attempt == 2:
             request["original_action"] = prior_action or default_action()
             request["rejection_reason"] = rejection_reason or "The action was rejected."
-        await self.channels[proposer].send(request)
+        await self._send(self.channels[proposer], request)
         raw = await self.channels[proposer].recv_reply(rid, self.config.action_window_s)
         action = self._parse_action(raw)
+        self.capture.consumed(
+            proposer, rid, raw, {"action": action["text"]}, action["default"]
+        )
         made = {
             "type": "action_made",
             "turn": turn,
@@ -309,7 +415,9 @@ class Episode:
         self.winner_slots = list(ruling["winner_slots"])
         return {"attempts": attempts, "final_valid": ruling["valid"]}
 
-    async def _debate(self, turn: int, proposer: int, proposal: dict[str, Any]) -> list[dict[str, Any]]:
+    async def _debate(
+        self, turn: int, proposer: int, proposal: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         self.current_phase = "debate"
 
         async def one(seat: int) -> dict[str, Any]:
@@ -325,12 +433,24 @@ class Episode:
                     turn=turn, proposal_kind=str(proposal.get("kind", ""))
                 ),
             }
-            await self.channels[seat].send(request)
+            await self._send(self.channels[seat], request)
             raw = await self.channels[seat].recv_reply(rid, self.config.debate_window_s)
-            return self._parse_debate(seat, raw)
+            action = self._parse_debate(seat, raw)
+            self.capture.consumed(
+                seat,
+                rid,
+                raw,
+                {k: v for k, v in action.items() if k not in {"seat", "default"}},
+                action["default"],
+            )
+            return action
 
         # Both debaters receive the same state and cannot condition on each other.
-        return list(await asyncio.gather(*(one(seat) for seat in range(SEAT_COUNT) if seat != proposer)))
+        return list(
+            await asyncio.gather(
+                *(one(seat) for seat in range(SEAT_COUNT) if seat != proposer)
+            )
+        )
 
     async def _vote(
         self, turn: int, proposal: dict[str, Any], debates: list[dict[str, Any]]
@@ -350,9 +470,13 @@ class Episode:
                     turn=turn, proposal_kind=str(proposal.get("kind", ""))
                 ),
             }
-            await self.channels[seat].send(request)
+            await self._send(self.channels[seat], request)
             raw = await self.channels[seat].recv_reply(rid, self.config.vote_window_s)
-            return self._parse_vote(seat, raw)
+            action = self._parse_vote(seat, raw)
+            self.capture.consumed(
+                seat, rid, raw, {"vote": action["vote"]}, action["default"]
+            )
+            return action
 
         return list(await asyncio.gather(*(one(seat) for seat in range(SEAT_COUNT))))
 
@@ -374,7 +498,12 @@ class Episode:
         action_record = await self._action(turn, proposer)
         if self.winner_slots:
             self.history.append(
-                {"turn": turn, "proposer": proposer, "action": action_record, "winner_slots": self.winner_slots}
+                {
+                    "turn": turn,
+                    "proposer": proposer,
+                    "action": action_record,
+                    "winner_slots": self.winner_slots,
+                }
             )
             return
 
@@ -474,7 +603,10 @@ class Episode:
             self.termination = "turn_cap"
 
         winner_share = 1.0 / len(self.winner_slots)
-        scores = [winner_share if seat in self.winner_slots else 0.0 for seat in range(SEAT_COUNT)]
+        scores = [
+            winner_share if seat in self.winner_slots else 0.0
+            for seat in range(SEAT_COUNT)
+        ]
         reason = (
             "Gnome Law declared victory."
             if self.termination == "constitution_victory"
@@ -507,6 +639,7 @@ class Episode:
             "judge_usage": self.judge_usage,
             "results": results,
         }
+        self.results = results
         return results, replay
 
     def snapshot_for(self, seat: int) -> dict[str, Any]:

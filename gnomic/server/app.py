@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,8 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, Response, WebSocket
 from starlette.websockets import WebSocketDisconnect
+
+from gnomic.training import validate_capture_environment, write_private_episode
 
 from .channel import NullSeatChannel, SeatChannel
 from .config import GameConfig
@@ -35,6 +38,7 @@ class GameServer:
         self.config: GameConfig | None = None
         self.tokens: list[str] = []
         self.channels: dict[int, SeatChannel] = {}
+        self.run_task: asyncio.Task | None = None
         self.started = False
         self.done = False
         self.fatal_error: str | None = None
@@ -48,13 +52,14 @@ class GameServer:
         self._start_lock = asyncio.Lock()
 
         if self.replay_mode:
-            raw = maybe_decompress(read_data(os.environ["COGAME_LOAD_REPLAY_URI"])
-            )
+            raw = maybe_decompress(read_data(os.environ["COGAME_LOAD_REPLAY_URI"]))
             self.loaded_replay = json.loads(raw)
         else:
             config_uri = os.environ.get("COGAME_CONFIG_URI")
             if not config_uri:
                 raise RuntimeError("COGAME_CONFIG_URI is required outside replay mode")
+            if "COGAME_SAVE_TRAJECTORY_URI" in os.environ:
+                validate_capture_environment()
             self.config = GameConfig.model_validate_json(read_data(config_uri))
             self.tokens = self.config.tokens
 
@@ -73,7 +78,9 @@ class GameServer:
         assert self.config is not None
         if self.config.seed is not None:
             return self.config.seed
-        return int(hashlib.sha256("|".join(self.tokens).encode()).hexdigest(), 16) % (2**31)
+        return int(hashlib.sha256("|".join(self.tokens).encode()).hexdigest(), 16) % (
+            2**31
+        )
 
     async def maybe_start(self) -> None:
         async with self._start_lock:
@@ -81,7 +88,7 @@ class GameServer:
                 return
             if len(self.channels) == self.config.seat_count():
                 self.started = True
-                asyncio.create_task(self._run())
+                self.run_task = asyncio.create_task(self._run())
 
     async def start_after_timeout(self) -> None:
         assert self.config is not None
@@ -89,23 +96,33 @@ class GameServer:
         async with self._start_lock:
             if not self.started:
                 self.started = True
-                asyncio.create_task(self._run())
+                self.run_task = asyncio.create_task(self._run())
 
     def _episode_channels(self) -> list[SeatChannel]:
         assert self.config is not None
-        return [self.channels.get(seat) or NullSeatChannel(seat) for seat in range(self.config.seat_count())]
+        return [
+            self.channels.get(seat) or NullSeatChannel(seat)
+            for seat in range(self.config.seat_count())
+        ]
 
     async def _run(self) -> None:
         assert self.config is not None
         channels = self._episode_channels()
-        self.episode = Episode(self.config, channels, seed=self._seed(), broadcast=self.broadcast)
+        self.episode = Episode(
+            self.config, channels, seed=self._seed(), broadcast=self.broadcast
+        )
+        status = "failed"
         try:
             self.results, self.replay = await asyncio.wait_for(
                 self.episode.run(), timeout=self.config.episode_timeout_seconds
             )
+            status = "completed"
             self._write_artifacts()
             await asyncio.gather(
-                *(channel.send({"type": "final", "scores": self.results["scores"]}) for channel in channels)
+                *(
+                    channel.send({"type": "final", "scores": self.results["scores"]})
+                    for channel in channels
+                )
             )
             await self.broadcast({"type": "final", "scores": self.results["scores"]})
             self.done = True
@@ -116,11 +133,24 @@ class GameServer:
             try:
                 self._write_operator_log()
             except Exception as log_exc:
-                self.fatal_error += f"; operator log write failed: {type(log_exc).__name__}: {log_exc}"
+                self.fatal_error += (
+                    f"; operator log write failed: {type(log_exc).__name__}: {log_exc}"
+                )
             await self.broadcast({"type": "fatal_error", "error": self.fatal_error})
             # Deliberately leave result/replay artifacts absent: a production judge
             # outage is an episode failure, not a mechanical game with different law.
         finally:
+            if "COGAME_SAVE_TRAJECTORY_URI" in os.environ:
+                failure = sys.exception()
+                write_private_episode(
+                    os.environ["COGAME_SAVE_TRAJECTORY_URI"],
+                    self.episode.capture.finish(
+                        status=status,
+                        failure_kind=type(failure).__name__
+                        if failure is not None
+                        else self.fatal_error,
+                    ),
+                )
             # Hold the server up until /global spectators disconnect (capped).
             # The hosted certification probe connects to /global before the
             # episode starts but pings only after it observes every player pod
@@ -174,7 +204,11 @@ async def _snapshot(game: GameServer, channel: SeatChannel, seat: int) -> None:
         return
     await channel.send(game.episode.snapshot_for(seat))
     await channel.send(
-        {"type": "snapshot", "turn": game.episode.current_turn, "phase": game.episode.current_phase}
+        {
+            "type": "snapshot",
+            "turn": game.episode.current_turn,
+            "phase": game.episode.current_phase,
+        }
     )
 
 

@@ -13,3 +13,5 @@ coworld_manifest.json
 artifacts/
 tmp/
 .env
+
+.ruff_cache/

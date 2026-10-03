@@ -100,7 +100,7 @@
         "judge_mode": {
           "type": "string",
           "enum": [
-            "bedrock",
+            "native",
             "deterministic"
           ]
         },
@@ -235,6 +235,18 @@
         "-m",
         "gnomic.players.baseline"
       ]
+    },
+    {
+      "id": "training-native",
+      "name": "Gnomic Native Learner",
+      "type": "player",
+      "description": "Canonical native Messages player for a platform-registered saved checkpoint; exact private prompts and applied decisions.",
+      "image": "{{GNOMIC_IMAGE}}",
+      "run": [
+        "python",
+        "-m",
+        "gnomic.players.native"
+      ]
     }
   ],
   "commissioner": [
@@ -263,8 +275,8 @@
         "debate_window_s": 600,
         "vote_window_s": 600,
         "judge_window_s": 600,
-        "judge_mode": "bedrock",
-        "judge_model": "us.anthropic.claude-opus-4-7",
+        "judge_mode": "native",
+        "judge_model": "anthropic/claude-opus-4.7",
         "player_connect_timeout_seconds": 180,
         "episode_timeout_seconds": 7200,
         "players": [
@@ -293,7 +305,7 @@
         "vote_window_s": 360,
         "judge_window_s": 30,
         "judge_mode": "deterministic",
-        "judge_model": "us.anthropic.claude-opus-4-7",
+        "judge_model": "anthropic/claude-opus-4.7",
         "player_connect_timeout_seconds": 180,
         "episode_timeout_seconds": 1500,
         "players": [
@@ -320,7 +332,7 @@
       "vote_window_s": 2,
       "judge_window_s": 5,
       "judge_mode": "deterministic",
-      "judge_model": "us.anthropic.claude-opus-4-7",
+      "judge_model": "anthropic/claude-opus-4.7",
       "player_connect_timeout_seconds": 30,
       "episode_timeout_seconds": 240,
       "players": [

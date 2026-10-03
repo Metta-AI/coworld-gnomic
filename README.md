@@ -70,39 +70,46 @@ The commissioner selects the qualifier through its own manifest variant rather
 than an episode-level config override. That is deliberate: the deployed platform
 wire contract resolves league episode configuration from `variant_id`.
 
-## Post-training through the player SDK
+## Private training episodes
 
-The SDK answers all five normal requests: introduction, action, proposal,
-debate, and vote. Action repairs use the action callback with the rejection
-reason in the visible request. Export ten complete deterministic-Judge games
-with the bundled Scribe policy:
+Hosted learner inference uses `python -m gnomic.players.native`. It shares one
+player-visible prompt with the Scribe teacher and the authoritative engine parser.
+Register saved weights, tokenizer and chat-template identities through the trusted
+platform checkpoint registry. `COWORLD_LLM_MODEL`, temperature and top-p overrides
+apply only to learners. The Elder always uses the configured `judge_model`, adaptive
+high-effort reasoning, temperature 1 and top-p 1. There is no Bedrock fallback.
 
-```bash
-uv run python tools/export_posttrain.py /tmp/gnomic-posttrain --episodes 10
-```
+`COGAME_SAVE_TRAJECTORY_URI` activates a separate private artifact. Capture requires
+an episode ID, immutable source revision and published game version. The journal
+retains exact native requests, raw responses, actual response headers and call IDs,
+started calls, opponent generations, applied actions, outcomes and frozen Elder
+adjudications. It never adds private generation data to public replay or results.
+Unfinished calls truncate the private episode; a sealed journal ignores late writes.
 
-The exporter writes owner-only Metta post-training `train.jsonl` and
-`validation.jsonl` files, split by whole seed. Each completion is the actual
-reply sent through the player SDK. Scribe is a protocol teacher, not a
-competitive policy. From a Metta checkout, run bounded supervised fine-tuning:
-
-```bash
-uv run --package metta-posttrain --extra train metta-posttrain train \
-  --dataset /tmp/gnomic-posttrain --output /tmp/gnomic-adapter \
-  --model Qwen/Qwen3-0.6B --revision PINNED_MODEL_COMMIT \
-  --device cuda --max-steps 100 --max-length 4096
-```
-
-The exporter and `gnomic.players.posttrain_model` use one player-visible
-prompt. Install the `posttrain` extra and package the adapter and pinned base
-model with a player container:
+Export ten whole games per declared manifest variant from clean committed source:
 
 ```bash
-python -m gnomic.players.posttrain_model --adapter /path/to/adapter --device cpu
+uv run python tools/export_posttrain.py /tmp/gnomic-private-teachers --episodes 10
 ```
 
-The player reads `COWORLD_PLAYER_WS_URL` and replies over the ordinary
-WebSocket. Evaluate held-out games before submitting a trained policy.
+The exporter follows each variant's declared judge mode. The standard variant
+requires a configured native endpoint; the qualifier uses its deterministic judge.
+For a separate local protocol-teacher corpus, explicitly pass
+`--judge-mode deterministic`. This diagnostic environment is recorded and does not
+establish production Elder behavior or policy strength. An explicit `--turns-max`
+creates a diagnostic capped edition rather than the declared full variant.
+
+The output contains owner-only complete episode JSONL files and a source manifest.
+Run the Coworld SDK qualifier and Metta hosted-data importer from the reviewed
+training-readiness platform change before training. Select `scripted-scribe` for
+teacher targets, retain opponents separately, and split whole seed families across
+training and validation. Source and environment identities must stay attached to
+all datasets. Teacher labels are unreviewed protocol examples, not strength claims.
+
+The Opus persona and Haiku baselines retain their own actual prompts as opponent
+evidence. Their noncanonical prompts are excluded from canonical learner labels.
+The former uninstrumented local adapter launcher has been replaced by native
+checkpoint serving so hosted play, evaluation and capture use the same path.
 
 ## Local development
 

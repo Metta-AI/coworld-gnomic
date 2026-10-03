@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 
 class _Msg(BaseModel):
@@ -178,10 +179,25 @@ def parse_server_message(raw: dict[str, Any]) -> _Msg | None:
     model = SERVER_MESSAGES.get(raw.get("type", ""))
     if model is None:
         return None
+    return model.model_validate(raw)
+
+
+class ParsedReply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["parsed", "invalid"]
+    value: dict[str, JsonValue] | None = None
+    error: str | None = None
+
+
+def parse_reply_text(text: str) -> ParsedReply:
+    """Player text is untrusted protocol data; expose an explicit parse outcome."""
     try:
-        return model.model_validate(raw)
-    except Exception:
-        return None
+        value = json.loads(text)
+        if not isinstance(value, dict):
+            return ParsedReply(kind="invalid", error="reply-must-be-object")
+        return ParsedReply(kind="parsed", value=value)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        return ParsedReply(kind="invalid", error=type(exc).__name__)
 
 
 def make_reply(rid: int, payload: dict[str, Any]) -> dict[str, Any]:
