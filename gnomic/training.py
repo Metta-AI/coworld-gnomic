@@ -263,7 +263,9 @@ class Capture:
                     seat=str(seat),
                     observation={
                         "view": window.observation,
-                        "prompt_template": ep.config.prompt_selection.metadata(selected.prompt if selected is not None else window.prompt),
+                        "prompt_template": ep.config.prompt_selection.metadata(
+                            selected.prompt if selected is not None else window.prompt
+                        ),
                         "submitted": window.submitted,
                     },
                     prompt=selected.prompt if selected is not None else window.prompt,
