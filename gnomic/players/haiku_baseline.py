@@ -91,7 +91,9 @@ class HaikuPolicy(Policy):
         return self.baseline.action(view)
 
     def _system(self, view: GameView) -> str:
-        return SYSTEM.format(seat=view.seat, n=view.num_players)
+        canonical = f"You are seat {view.seat} in a game of Gnomic with {view.num_players} players."
+        system = SYSTEM.format(seat=view.seat, n=view.num_players)
+        return view.prompt_selection.introduction(canonical, f"seat {view.seat} in a game of Gnomic with {view.num_players} players") + system[len(canonical):]
 
     async def propose(self, view: GameView) -> dict:
         out = await self.client.complete(

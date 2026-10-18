@@ -15,7 +15,13 @@ SYSTEM = (
 
 def messages_for(view: GameView) -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": SYSTEM},
+        {
+            "role": "system",
+            "content": view.prompt_selection.introduction(
+                "You are a Gnomic player.", "a Gnomic player"
+            )
+            + SYSTEM[len("You are a Gnomic player.") :],
+        },
         {
             "role": "user",
             "content": json.dumps(

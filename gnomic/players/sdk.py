@@ -31,6 +31,7 @@ from typing import Any
 from gnomic.lifecycle import OwnershipUnsettled, bounded, main_owned, player_loop
 from gnomic.llm_transport import AttemptPublisher, LearnerWindow, current_window
 
+from ..prompts import PromptSelection
 from ..protocol import make_reply
 
 REPLY_MARGIN_S = 0.35
@@ -49,6 +50,7 @@ def stable_rng_int(*parts: object, mod: int) -> int:
 class GameView:
     """Folded game state: every prompt is answerable from the view alone."""
 
+    prompt_selection: PromptSelection = field(default_factory=PromptSelection)
     seat: int = -1
     session: dict = field(default_factory=dict)
     host_constraints: list[str] = field(default_factory=list)
@@ -87,6 +89,7 @@ class GameView:
             self.request = msg
         if mtype == "lobby":
             self.seat = msg["seat"]
+            self.prompt_selection = PromptSelection.model_validate(msg.get("prompt_selection", {}))
         elif mtype == "game_start":
             self.session = msg.get("session", {})
             self.host_constraints = msg.get("host_constraints", [])

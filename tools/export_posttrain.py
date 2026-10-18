@@ -17,6 +17,7 @@ from gnomic.lifecycle import (
     settle,
     shutdown_deadline,
 )
+from gnomic.prompts import PromptSelection, TRAINING, VARIANTS
 from gnomic.players.scribe import ScribePolicy
 from gnomic.players.sdk import InProcessTransport, PlayerSession
 from gnomic.server.channel import InProcessChannel, settle_channels
@@ -95,7 +96,17 @@ def main() -> None:
         help="Explicit diagnostic cap; omit for the declared whole variant",
     )
     parser.add_argument("--judge-mode", choices=("native", "deterministic"))
+    parser.add_argument("--prompt-variant", choices=VARIANTS, default="canonical")
+    parser.add_argument("--prompt-seed", type=int)
     args = parser.parse_args()
+    selection = PromptSelection.model_validate(
+        {
+            "variant": args.prompt_variant,
+            **({"seed": args.prompt_seed} if args.prompt_seed is not None else {}),
+        }
+    )
+    if selection.selected not in TRAINING:
+        raise ValueError("held-out wording is evaluation-only")
     if (
         args.episodes < 10
         or args.first_seed < 0
@@ -132,6 +143,7 @@ def main() -> None:
     for variant in manifest["variants"]:
         config = {
             **variant["game_config"],
+            "prompt_selection": selection.model_dump(),
             "judge_mode": args.judge_mode or variant["game_config"]["judge_mode"],
             "players": [{"name": "scripted-scribe"} for _ in range(3)],
         }
@@ -139,7 +151,7 @@ def main() -> None:
             config["turns_max"] = args.turns_max
         for seed in range(args.first_seed, args.first_seed + args.episodes):
             os.environ["COWORLD_EPISODE_ID"] = (
-                f"gnomic-{variant['id']}-scribe-{seed}-{source[:12]}"
+                f"gnomic-{variant['id']}-scribe-{seed}-{source[:12]}-{selection.selected}-{selection.seed}"
             )
             path = args.output / f"{variant['id']}-{seed}.jsonl"
             episode = main_owned(
@@ -165,6 +177,7 @@ def main() -> None:
             )
             decision_count += len(episode.decisions)
     summary = {
+        "prompt_selection": selection.model_dump(),
         "source_revision": source,
         "game_version": os.environ["COWORLD_GAME_VERSION"],
         "teacher": "scripted-scribe",

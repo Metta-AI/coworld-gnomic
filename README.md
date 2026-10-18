@@ -70,6 +70,37 @@ The commissioner selects the qualifier through its own manifest variant rather
 than an episode-level config override. That is deliberate: the deployed platform
 wire contract resolves league episode configuration from `variant_id`.
 
+## Player prompt diversity
+
+Episode configuration accepts `prompt_selection` with a `variant` and an
+independent nonnegative `seed`. The default `canonical` preserves each original
+player prompt. `plain`, `numbered`, `questions`, and `reordered` provide four
+additional introductions. `mixed` requires an explicit seed and selects one of
+these five training introductions for the entire episode, shared by all seats.
+`heldout-briefing` and `heldout-reference` are reserved for evaluation.
+
+The host delivers selection before introductions. Native learners, Scribe teacher
+capture, Opus personas, and Haiku players use it without changing simulation
+randomness, action schemas, persona strategy, or Elder instructions. Selection
+metadata stays outside model-visible game observations and public replay.
+Private decisions include the bank, resolved wording, requested selection, prompt
+seed, and SHA-256 for each rendered message. Existing native attempt evidence
+retains actual requests and responses, including noncanonical opponents.
+
+Teacher export accepts `--prompt-variant mixed --prompt-seed 7` and rejects
+held-out wordings. Keep all variants and wording replicas of a game seed in the
+same split. Exported candidates still require independent content-bound review.
+Compare canonical and mixed training against an unchanged baseline on matched
+seeds, seats, opponent policies, judge settings, and inference budgets. Freeze
+training choices before evaluating held-out wordings; report failures and invalid
+actions alongside win rates. No learning improvement is established locally.
+
+Run `uv run python -m tools.test_prompt_games` for complete three-player game
+checks. The standard game's diagnostic panel uses the existing deterministic
+judge with its full 45-turn cap; the qualifier uses its declared one-turn mode.
+These checks establish protocol and execution parity, not production Elder parity.
+Production evaluation needs a configured native endpoint and published budgets.
+
 ## Private training episodes
 
 Hosted learner inference uses `python -m gnomic.players.native`. It shares one
