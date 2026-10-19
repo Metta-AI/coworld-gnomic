@@ -17,10 +17,17 @@ def messages_for(view: GameView) -> list[dict[str, str]]:
     return [
         {
             "role": "system",
-            "content": view.prompt_selection.introduction(
-                "You are a Gnomic player.", "a Gnomic player"
-            )
-            + SYSTEM[len("You are a Gnomic player.") :],
+            "content": view.prompt_selection.rules(
+                SYSTEM,
+                (
+                    "You play Gnomic. Use only the player-visible view when answering the current request.",
+                    "Return one JSON reply containing the request's rid and the fields required by the Gnomic player protocol.",
+                ),
+                (
+                    "For this Gnomic decision, respond to the current request from the information visible to your player alone.",
+                    "Your response must be a single JSON reply with that request's rid and all fields the Gnomic player protocol requires.",
+                ),
+            ),
         },
         {
             "role": "user",

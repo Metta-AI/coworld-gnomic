@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 TRAINING = ("canonical", "plain", "numbered", "questions", "reordered")
 VARIANTS = (*TRAINING, "heldout-briefing", "heldout-reference", "mixed")
-BANK = "gnomic-player-rules-v1"
+BANK = "gnomic-player-rules-v2"
 
 
 class PromptSelection(BaseModel):
@@ -61,3 +61,20 @@ class PromptSelection(BaseModel):
                 for message in prompt
             ],
         }
+
+    def rules(
+        self, canonical: str, paragraphs: tuple[str, ...], heldout: tuple[str, ...]
+    ) -> str:
+        if self.selected == "canonical":
+            return canonical
+        if self.selected in ("heldout-briefing", "heldout-reference"):
+            paragraphs = heldout
+        if self.selected in ("reordered", "heldout-reference"):
+            paragraphs = tuple(reversed(paragraphs))
+        if self.selected == "numbered":
+            return "\n".join(
+                f"{index}. {paragraph}" for index, paragraph in enumerate(paragraphs, 1)
+            )
+        if self.selected == "questions":
+            return "What instructions govern this decision?\n" + "\n\n".join(paragraphs)
+        return "\n\n".join(paragraphs)

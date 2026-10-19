@@ -150,8 +150,16 @@ def main() -> None:
         if args.turns_max is not None:
             config["turns_max"] = args.turns_max
         for seed in range(args.first_seed, args.first_seed + args.episodes):
+            episode_selection = (
+                selection.model_copy(
+                    update={"seed": selection.seed + seed - args.first_seed}
+                )
+                if selection.variant == "mixed"
+                else selection
+            )
+            config["prompt_selection"] = episode_selection.model_dump()
             os.environ["COWORLD_EPISODE_ID"] = (
-                f"gnomic-{variant['id']}-scribe-{seed}-{source[:12]}-{selection.selected}-{selection.seed}"
+                f"gnomic-{variant['id']}-scribe-{seed}-{source[:12]}-{episode_selection.selected}-{episode_selection.seed}"
             )
             path = args.output / f"{variant['id']}-{seed}.jsonl"
             episode = main_owned(
@@ -170,6 +178,7 @@ def main() -> None:
                     "variant": variant["id"],
                     "seed": seed,
                     "seed_family": episode.episode.seed_family,
+                    "prompt_selection": episode_selection.model_dump(),
                     "path": path.name,
                     "status": episode.episode.status,
                     "decisions": len(episode.decisions),

@@ -72,11 +72,16 @@ wire contract resolves league episode configuration from `variant_id`.
 
 ## Player prompt diversity
 
+The v2 bank varies learner response instructions, Haiku turn/victory rules, and
+Opus order/protection/action rules. Canonical text, persona guidance, mutable
+rulebooks, judge instructions, host constraints, and response schemas stay fixed.
+Held-out presentations use separate paraphrases.
+
 Episode configuration accepts `prompt_selection` with a `variant` and an
 independent nonnegative `seed`. The default `canonical` preserves each original
 player prompt. `plain`, `numbered`, `questions`, and `reordered` provide four
-additional introductions. `mixed` requires an explicit seed and selects one of
-these five training introductions for the entire episode, shared by all seats.
+additional presentations. `mixed` requires an explicit seed and selects one of
+these five training presentations for the entire episode, shared by all seats.
 `heldout-briefing` and `heldout-reference` are reserved for evaluation.
 
 The host delivers selection before introductions. Native learners, Scribe teacher
@@ -88,8 +93,9 @@ seed, and SHA-256 for each rendered message. Existing native attempt evidence
 retains actual requests and responses, including noncanonical opponents.
 
 Teacher export accepts `--prompt-variant mixed --prompt-seed 7` and rejects
-held-out wordings. Keep all variants and wording replicas of a game seed in the
-same split. Exported candidates still require independent content-bound review.
+held-out wordings. Mixed export cycles through training wordings across seeds,
+records each episode selection, and preserves requested game counts. Keep all
+variants and wording replicas of a game seed in the same split. Exported candidates still require independent content-bound review.
 Compare canonical and mixed training against an unchanged baseline on matched
 seeds, seats, opponent policies, judge settings, and inference budgets. Freeze
 training choices before evaluating held-out wordings; report failures and invalid
