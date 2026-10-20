@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..prompts import PromptSelection
+
 from ..engine import HARD_TURN_CAP, SEAT_COUNT
 
 
@@ -17,6 +19,7 @@ class PlayerEntry(BaseModel):
 class GameConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    prompt_selection: PromptSelection = Field(default_factory=PromptSelection)
     tokens: list[str] = Field(min_length=SEAT_COUNT, max_length=SEAT_COUNT)
     players: list[PlayerEntry] = Field(min_length=SEAT_COUNT, max_length=SEAT_COUNT)
     num_agents: Literal[SEAT_COUNT] = SEAT_COUNT

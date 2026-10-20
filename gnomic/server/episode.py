@@ -132,7 +132,7 @@ class Episode:
 
         async def ask(channel: SeatChannel) -> str | None:
             rid = self._next_rid()
-            await self._send(channel, {"type": "lobby", "seat": channel.seat})
+            await self._send(channel, {"type": "lobby", "seat": channel.seat, "prompt_selection": self.config.prompt_selection.model_dump()})
             await self._send(
                 channel,
                 {

@@ -91,7 +91,28 @@ class HaikuPolicy(Policy):
         return self.baseline.action(view)
 
     def _system(self, view: GameView) -> str:
-        return SYSTEM.format(seat=view.seat, n=view.num_players)
+        canonical = f"You are seat {view.seat} in a game of Gnomic with {view.num_players} players."
+        system = SYSTEM.format(seat=view.seat, n=view.num_players)
+        return (
+            view.prompt_selection.introduction(
+                canonical,
+                f"seat {view.seat} in a game of Gnomic with {view.num_players} players",
+            )
+            + ("" if view.prompt_selection.selected == "canonical" else "\n\n")
+            + view.prompt_selection.rules(
+                system[len(canonical) :],
+                (
+                    " Players propose rule changes in turn. Debate precedes a vote by everyone; a Judge LLM enacts passed proposals and applies every rule each turn.",
+                    "Reach the point victory threshold in common state 'victory_points', or hold the most points when the game ends, to win.",
+                    "Be strategic: propose rules that favor you but can attract a majority; vote your interest.",
+                ),
+                (
+                    " Rule changes are proposed on players' turns, debated, then voted on by all players. Passed changes are enacted by a Judge LLM, which applies all rules each turn.",
+                    "Victory comes from reaching the points threshold recorded as 'victory_points' in common state, or from having the most points at game end.",
+                    "Be strategic: propose rules that favor you but can attract a majority; vote your interest.",
+                ),
+            )
+        )
 
     async def propose(self, view: GameView) -> dict:
         out = await self.client.complete(

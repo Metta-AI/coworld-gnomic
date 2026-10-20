@@ -30,7 +30,7 @@ next turn at its first listed seat. The host advances a public
 pad or normalize a proposed order.
 
 The Judge receives the complete public board and turn transcript. Claude Opus
-4.8 returns only typed rule and state operations. The engine dry-runs and applies
+4.7 returns only typed rule and state operations. The engine dry-runs and applies
 the operations atomically. Malformed or semantically unsafe output is repaired
 once; a second failure fails the episode. Model-generated code is never run.
 

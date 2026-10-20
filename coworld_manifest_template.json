@@ -33,6 +33,49 @@
         "players"
       ],
       "properties": {
+        "prompt_selection": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "variant": {
+              "type": "string",
+              "enum": [
+                "canonical",
+                "plain",
+                "numbered",
+                "questions",
+                "reordered",
+                "heldout-briefing",
+                "heldout-reference",
+                "mixed"
+              ],
+              "default": "canonical"
+            },
+            "seed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "variant": {
+                    "const": "mixed"
+                  }
+                },
+                "required": [
+                  "variant"
+                ]
+              },
+              "then": {
+                "required": [
+                  "seed"
+                ]
+              }
+            }
+          ]
+        },
         "tokens": {
           "type": "array",
           "minItems": 3,

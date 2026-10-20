@@ -24,7 +24,8 @@ jobs:
       - name: Run the test suite
         run: |
           uv run --extra dev pytest tests/ -q
-          uv run --extra dev ruff check --select E4,E7,E9,F gnomic tools/export_posttrain.py tests/
+          uv run --extra dev python -m tools.test_prompt_games
+          uv run --extra dev ruff check --select E4,E7,E9,F gnomic tools/export_posttrain.py tools/test_prompt_games.py tests/
           uv run --extra dev ruff format --check gnomic/llm_transport.py gnomic/training.py gnomic/players/native.py tests/test_training_native.py
           uv run --extra dev ty check gnomic/llm_transport.py gnomic/training.py gnomic/players/native.py
 
