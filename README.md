@@ -95,7 +95,16 @@ retains actual requests and responses, including noncanonical opponents.
 Teacher export accepts `--prompt-variant mixed --prompt-seed 7` and rejects
 held-out wordings. Mixed export cycles through training wordings across seeds,
 records each episode selection, and preserves requested game counts. Keep all
-variants and wording replicas of a game seed in the same split. Exported candidates still require independent content-bound review.
+variants and wording replicas of the same native world/Fate family in the same
+split. The family binds the actual initial rulebook/state and the full 45-turn
+host Fate stream before play; signed seed aliases, shorter horizons, policy names
+and prompt wordings cannot create independent families. Original seed labels remain
+in config/replay, and stored legacy episodes are unchanged. Different root families
+do not by themselves establish scientific task independence. Exported candidates
+still require independent content-bound review.
+Before mixing legacy raw-seed families with the new schema, regroup legacy episodes
+by their actual initial world and full Fate stream; unchanged old labels alone do
+not prevent a legacy/new split collision.
 Compare canonical and mixed training against an unchanged baseline on matched
 seeds, seats, opponent policies, judge settings, and inference budgets. Freeze
 training choices before evaluating held-out wordings; report failures and invalid
@@ -142,6 +151,10 @@ training-readiness platform change before training. Select `scripted-scribe` for
 teacher targets, retain opponents separately, and split whole seed families across
 training and validation. Source and environment identities must stay attached to
 all datasets. Teacher labels are unreviewed protocol examples, not strength claims.
+
+Native capture compares the production parser's canonical action with the executed
+action. A selected model response can therefore contain whitespace or truncation
+normalization; selection alone does not establish a verbatim training target.
 
 The Opus persona and Haiku baselines retain their own actual prompts as opponent
 evidence. Their noncanonical prompts are excluded from canonical learner labels.
