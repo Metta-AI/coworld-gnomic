@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import random
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -10,6 +12,7 @@ from typing import Any
 from gnomic.lifecycle import bounded
 
 from ..engine import (
+    HARD_TURN_CAP,
     HOST_CONSTRAINTS,
     SEAT_COUNT,
     Board,
@@ -37,6 +40,18 @@ GNOME_SEAT_NAMES = ["Ivan", "Anton", "Yura"]
 Broadcast = Callable[[dict[str, Any]], Awaitable[None]]
 
 
+def _draw_host_random(rng: random.Random) -> dict[str, Any]:
+    entropy = rng.getrandbits(63)
+    return {
+        "entropy": entropy,
+        "random_seat": rng.randrange(SEAT_COUNT),
+        "coin": "heads" if entropy % 2 == 0 else "tails",
+        "d6": entropy % 6 + 1,
+        "d20": entropy % 20 + 1,
+        "d100": entropy % 100 + 1,
+    }
+
+
 class Episode:
     def __init__(
         self,
@@ -52,6 +67,30 @@ class Episode:
         self.seed = seed
         self.board = Board.initial(seed=seed)
         self._rng = random.Random(seed)
+        # Signed seeds can identify the same world and complete Fate stream.
+        # Bind before any history/cursor mutation without advancing live Fate.
+        future = random.Random(0)
+        future.setstate(self._rng.getstate())
+        initial = json.dumps(
+            self.board.as_dict(), sort_keys=True, separators=(",", ":")
+        )
+        fate = json.dumps(
+            [_draw_host_random(future) for _ in range(HARD_TURN_CAP)],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        self.scenario_root = {
+            "version": "gnomic-native-root-v1",
+            "hard_turn_cap": HARD_TURN_CAP,
+            "initial_board_sha256": hashlib.sha256(initial.encode()).hexdigest(),
+            "host_random_sha256": hashlib.sha256(fate.encode()).hexdigest(),
+        }
+        root_bytes = json.dumps(
+            self.scenario_root, sort_keys=True, separators=(",", ":")
+        ).encode()
+        self.scenario_family = (
+            "gnomic-native-root-v1-" + hashlib.sha256(root_bytes).hexdigest()
+        )
         self.history: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
         self._broadcast = broadcast
@@ -132,7 +171,14 @@ class Episode:
 
         async def ask(channel: SeatChannel) -> str | None:
             rid = self._next_rid()
-            await self._send(channel, {"type": "lobby", "seat": channel.seat, "prompt_selection": self.config.prompt_selection.model_dump()})
+            await self._send(
+                channel,
+                {
+                    "type": "lobby",
+                    "seat": channel.seat,
+                    "prompt_selection": self.config.prompt_selection.model_dump(),
+                },
+            )
             await self._send(
                 channel,
                 {
@@ -585,15 +631,7 @@ class Episode:
         await self._emit({**ruling_message, "rules": self.board.rules_dict()})
 
     def _host_random(self) -> dict[str, Any]:
-        entropy = self._rng.getrandbits(63)
-        return {
-            "entropy": entropy,
-            "random_seat": self._rng.randrange(SEAT_COUNT),
-            "coin": "heads" if entropy % 2 == 0 else "tails",
-            "d6": entropy % 6 + 1,
-            "d20": entropy % 20 + 1,
-            "d100": entropy % 100 + 1,
-        }
+        return _draw_host_random(self._rng)
 
     async def run(self) -> tuple[dict[str, Any], dict[str, Any]]:
         await self._announce_start()

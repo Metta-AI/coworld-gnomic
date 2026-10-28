@@ -553,10 +553,9 @@ def test_private_output_schema_traceback_hides_model_response(model_path):
     from gnomic.players.llm import ActionOutput
 
     model = ActionRuling if model_path == "judge" else ActionOutput
+    payload = '{"action":["PRIVATE_OUTPUT_SCHEMA_SENTINEL"],"valid":"PRIVATE_OUTPUT_SCHEMA_SENTINEL"}'
     with pytest.raises(ValidationError) as failure:
-        model.model_validate_json(
-            '{"action":["PRIVATE_OUTPUT_SCHEMA_SENTINEL"],"valid":"PRIVATE_OUTPUT_SCHEMA_SENTINEL"}'
-        )
+        model.model_validate_json(payload)
     assert "PRIVATE_OUTPUT_SCHEMA_SENTINEL" not in "".join(
         traceback.format_exception(failure.value)
     )
