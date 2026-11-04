@@ -125,6 +125,22 @@ platform checkpoint registry. `COWORLD_LLM_MODEL`, temperature and top-p overrid
 apply only to learners. The Elder always uses the configured `judge_model`, adaptive
 high-effort reasoning, temperature 1 and top-p 1. There is no Bedrock fallback.
 
+For an operator-owned shared checkpoint gateway, set the learner's
+`COWORLD_LLM_ENDPOINT` to the gateway base URL and `COWORLD_LLM_MODEL` to its
+attested model. Set `COWORLD_CHECKPOINT_API_KEY` through the secret mechanism and
+`COWORLD_CHECKPOINT_ATTESTATION` to the exact JSON contents of that gateway's
+`attestation.json`: `model`, `checkpoint_sha256`, `tokenizer_sha256`, and
+`chat_template_sha256`. The optional key and attestation are required together.
+The native learner sends bearer authentication, refuses redirects and mismatched
+response model or any fingerprint, and preserves the original prompt, decoder,
+deadline, parser and private response evidence. It never stores the key in an
+attempt. Without these optional fields the existing sidecar path is unchanged.
+The environment judge ignores learner checkpoint configuration and receives no
+learner credential. Run `metta-posttrain serve-checkpoint` with native Messages
+enabled on an independently verified, budgeted serving allocation; player support
+alone does not qualify CUDA serving, authenticated teacher data or hosted model
+performance. Do not run one local model process per seat.
+
 `COGAME_SAVE_TRAJECTORY_URI` activates a separate private artifact. Capture requires
 an episode ID, immutable source revision and published game version. The journal
 retains exact native requests, raw responses, actual response headers and call IDs,

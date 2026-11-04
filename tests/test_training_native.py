@@ -121,7 +121,16 @@ def fixture_reply(observation: dict) -> dict:
 
 
 @pytest.mark.parametrize(
-    "mode", ["accepted", "sampled", "greedy", "context_metadata", "malformed", "429"]
+    "mode",
+    [
+        "accepted",
+        "sampled",
+        "greedy",
+        "context_metadata",
+        "malformed",
+        "429",
+        "checkpoint",
+    ],
 )
 async def test_native_episode_retains_exact_calls_and_freezes_elder(
     tmp_path, monkeypatch, mode, *, seed=42, turns=1
@@ -145,6 +154,12 @@ async def test_native_episode_retains_exact_calls_and_freezes_elder(
             request = json.loads(body)
             slot = self.headers.get("X-Coworld-Player-Slot")
             call_id = str(uuid4())
+            if mode == "checkpoint":
+                assert self.headers.get("Authorization") == (
+                    "Bearer synthetic-native-checkpoint-canary"
+                    if slot is not None
+                    else None
+                )
             if request["system"] == JUDGE_SYSTEM:
                 assert slot is None
                 assert request["model"] == "anthropic/claude-opus-4.7"
@@ -249,6 +264,21 @@ async def test_native_episode_retains_exact_calls_and_freezes_elder(
     monkeypatch.setenv(
         "COWORLD_LLM_ENDPOINT", f"http://127.0.0.1:{provider.server_port}"
     )
+    if mode == "checkpoint":
+        monkeypatch.setenv(
+            "COWORLD_CHECKPOINT_API_KEY", "synthetic-native-checkpoint-canary"
+        )
+        monkeypatch.setenv(
+            "COWORLD_CHECKPOINT_ATTESTATION",
+            json.dumps(
+                {
+                    "model": "checkpoint/" + "a" * 64,
+                    "checkpoint_sha256": "a" * 64,
+                    "tokenizer_sha256": "b" * 64,
+                    "chat_template_sha256": "c" * 64,
+                }
+            ),
+        )
     monkeypatch.setenv("COWORLD_LLM_MODEL", "checkpoint/" + "a" * 64)
     monkeypatch.setenv("COWORLD_LLM_TEMPERATURE", "0.7" if mode == "sampled" else "0")
     monkeypatch.setenv("COWORLD_LLM_TOP_P", "0.9")
@@ -388,7 +418,7 @@ async def test_native_episode_retains_exact_calls_and_freezes_elder(
                 a.response_body_b64 is not None and a.http_status == 200
                 for a in generated
             )
-        if mode in {"accepted", "sampled", "greedy", "context_metadata"}:
+        if mode in {"accepted", "sampled", "greedy", "context_metadata", "checkpoint"}:
             assert all(d.action_status == "accepted" for d in episode.decisions)
             assert any(
                 d.observation["view"]["request"]["type"] == "action_repair_request"
@@ -652,3 +682,25 @@ async def test_external_teacher_claim_does_not_become_training_target(monkeypatc
     assert attempt.origin == "unknown"
     assert attempt.parsed_action == {"action": "pass"}
     assert not any(a.origin == "teacher" for d in record.decisions for a in d.attempts)
+
+
+async def test_checkpoint_native_full_45_turn_game_preserves_elder_and_private_evidence(
+    tmp_path, monkeypatch
+):
+    await test_native_episode_retains_exact_calls_and_freezes_elder(
+        tmp_path, monkeypatch, "checkpoint", seed=0, turns=45
+    )
+    episode = TrainingEpisode.model_validate_json(
+        (tmp_path / "private/episode.jsonl").read_text()
+    )
+    assert episode.episode.outcome["results"]["turns_played"] == 45
+    assert len(episode.decisions) == 363
+    assert "synthetic-native-checkpoint-canary" not in episode.model_dump_json()
+    assert all(
+        a.model_identity == "a" * 64
+        and a.tokenizer_identity == "b" * 64
+        and a.chat_template_sha256 == "c" * 64
+        for d in episode.decisions
+        for a in d.attempts
+        if a.origin == "model"
+    )
