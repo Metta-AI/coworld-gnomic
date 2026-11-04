@@ -7,6 +7,7 @@ import base64
 import json
 import math
 import os
+import re
 import ssl
 import sys
 import time
@@ -14,6 +15,7 @@ from collections.abc import Callable, Coroutine
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import httpx
@@ -27,6 +29,73 @@ from pydantic import (
 )
 
 from gnomic.lifecycle import OwnershipUnsettled, owned_task, settle, shutdown_deadline
+
+
+@dataclass(frozen=True)
+class CheckpointAccess:
+    """Optional learner-only credentials and expected shared-gateway identity."""
+
+    key: str = field(repr=False)
+    identity: dict[str, str]
+
+    @classmethod
+    def from_environment(cls, model: str) -> CheckpointAccess | None:
+        key = os.environ.get("COWORLD_CHECKPOINT_API_KEY", "")
+        raw = os.environ.get("COWORLD_CHECKPOINT_ATTESTATION", "")
+        if not key and not raw:
+            return None
+        if not key or not raw or len(raw.encode()) > 16384:
+            raise ValueError(
+                "Checkpoint key and bounded attestation are required together"
+            )
+        if any(not 33 <= ord(char) <= 126 for char in key):
+            raise ValueError("Invalid checkpoint key configuration")
+        endpoint = urlsplit(os.environ.get("COWORLD_LLM_ENDPOINT", ""))
+        if (
+            endpoint.scheme not in {"http", "https"}
+            or not endpoint.hostname
+            or endpoint.username is not None
+            or endpoint.password is not None
+            or endpoint.query
+            or endpoint.fragment
+        ):
+            raise ValueError("Invalid checkpoint endpoint configuration")
+        try:
+            identity = json.loads(raw)
+        except ValueError:
+            raise ValueError("Invalid checkpoint attestation") from None
+        fields = {
+            "model",
+            "checkpoint_sha256",
+            "tokenizer_sha256",
+            "chat_template_sha256",
+        }
+        if not isinstance(identity, dict) or set(identity) != fields:
+            raise ValueError("Unsupported checkpoint attestation fields")
+        if (
+            identity["model"] != model
+            or not isinstance(model, str)
+            or not model.strip()
+        ):
+            raise ValueError("Requested model differs from checkpoint attestation")
+        if any(
+            not isinstance(identity[name], str)
+            or re.fullmatch(r"[0-9a-f]{64}", identity[name]) is None
+            for name in fields - {"model"}
+        ):
+            raise ValueError("Checkpoint attestation requires exact SHA256 identities")
+        return cls(key, identity)
+
+    def validate_headers(self, headers: httpx.Headers) -> None:
+        for name, field_name in [
+            ("X-Coworld-Checkpoint-Sha256", "checkpoint_sha256"),
+            ("X-Coworld-Tokenizer-Sha256", "tokenizer_sha256"),
+            ("X-Coworld-Chat-Template-Sha256", "chat_template_sha256"),
+        ]:
+            if headers.get(name) != self.identity[field_name]:
+                raise ValueError(
+                    "Checkpoint response identity differs from attestation"
+                )
 
 
 class ReceivedHeaderPairs(BaseModel):
@@ -250,6 +319,9 @@ async def complete_native(
         generations.append(attempt)
     if window is not None:
         window.attempts.append(attempt)
+    checkpoint = (
+        CheckpointAccess.from_environment(model) if purpose == "learner" else None
+    )
     headers = {
         "content-type": "application/json",
         "anthropic-version": "2023-06-01",
@@ -258,6 +330,8 @@ async def complete_native(
     if purpose == "learner":
         headers["X-Coworld-Player-Slot"] = str(slot)
     on_attempt = window.publish if window is not None else None
+    if checkpoint:
+        headers["Authorization"] = "Bearer " + checkpoint.key
     attempt.request = payload
     attempt.prompt = [{"role": "system", "content": body["system"]}, *body["messages"]]
     attempt.decoder = {
@@ -270,7 +344,10 @@ async def complete_native(
     deadline = asyncio.get_running_loop().time() + timeout
 
     client = httpx.AsyncClient(
-        timeout=None, verify=ssl.create_default_context(), trust_env=False
+        timeout=None,
+        verify=ssl.create_default_context(),
+        trust_env=False,
+        follow_redirects=False,
     )
     response: httpx.Response | None = None
     try:
@@ -354,7 +431,12 @@ async def complete_native(
                     f"native Messages failed with status {response.status_code}"
                 )
 
+        if checkpoint:
+            assert response is not None
+            checkpoint.validate_headers(response.headers)
         parsed = Response.model_validate_json(raw)
+        if checkpoint and parsed.model != checkpoint.identity["model"]:
+            raise ValueError("Checkpoint response model differs from attestation")
         attempt.model = parsed.model
         attempt.stop_reason = parsed.stop_reason
         attempt.input_tokens = parsed.usage.input_tokens
