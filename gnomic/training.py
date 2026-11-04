@@ -289,13 +289,14 @@ class Capture:
         return TrainingEpisode(
             episode=EpisodeRecord(
                 episode_id=os.environ["COWORLD_EPISODE_ID"],
-                seed_family=f"gnomic-{ep.seed}",
+                seed_family=ep.scenario_family,
                 game_version=os.environ["COWORLD_GAME_VERSION"],
                 source_revision=os.environ["COWORLD_SOURCE_REVISION"],
                 image_digest=os.environ.get("COWORLD_GAME_IMAGE_DIGEST"),
                 status=completion,
                 participant_outcomes={str(s): {"score": scores[s]} for s in range(3)},
                 outcome={
+                    "native_scenario_root": ep.scenario_root,
                     "results": ep.results,
                     "config": ep.config.model_dump(exclude={"tokens"}),
                     "failure_kind": failure_kind,

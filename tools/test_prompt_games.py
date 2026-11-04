@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 
+from gnomic.engine import HARD_TURN_CAP
 from gnomic.lifecycle import main_owned
 from gnomic.prompts import BANK, PromptSelection
 from tools.export_posttrain import collect
@@ -30,6 +31,8 @@ def main() -> None:
     )
     canonical = {}
     systems = {}
+    roots = {}
+    families = {}
     games = 0
     for variant in manifest["variants"]:
         for seed in (7, 19):
@@ -50,7 +53,18 @@ def main() -> None:
                 episode = main_owned(collect(seed, config, records.append))
                 assert episode is not None and len(records) == 1
                 assert episode.episode.status == "completed"
-                assert episode.episode.seed_family == f"gnomic-{seed}"
+                root = episode.episode.outcome["native_scenario_root"]
+                assert root["version"] == "gnomic-native-root-v1"
+                assert root["hard_turn_cap"] == HARD_TURN_CAP == 45
+                expected_family = (
+                    "gnomic-native-root-v1-"
+                    + hashlib.sha256(
+                        json.dumps(root, sort_keys=True, separators=(",", ":")).encode()
+                    ).hexdigest()
+                )
+                assert episode.episode.seed_family == expected_family
+                assert roots.setdefault(seed, root) == root
+                assert families.setdefault(seed, expected_family) == expected_family
                 assert (
                     episode.episode.outcome["environment_policy"]["mode"]
                     == "deterministic"
@@ -117,6 +131,8 @@ def main() -> None:
                 )
     assert all(len(values) == 1 for values in systems.values())
     assert len({next(iter(values)) for values in systems.values()}) == 7
+    if roots[7] != roots[19]:
+        assert families[7] != families[19]
     print(
         games,
         "whole games; invariant actions, observations, results, families and private hashes PASS",
