@@ -296,6 +296,16 @@ async def complete_native(
         max_tokens=body["max_tokens"], temperature=temperature, top_p=top_p
     )
     payload = {**body, "model": model, **decoder.model_dump()}
+    checkpoint = (
+        CheckpointAccess.from_environment(model) if purpose == "learner" else None
+    )
+    if checkpoint is None and model.startswith("anthropic/claude-"):
+        # Legacy Messages samples identically when default-valued controls are
+        # omitted. Claude 4.7+ routes no longer advertise these parameters.
+        # Preserve every nondefault and all checkpoint decoder controls.
+        for name in ("temperature", "top_p"):
+            if payload[name] == 1:
+                payload.pop(name)
     attempt = Attempt(
         policy=window.policy
         if window is not None
@@ -319,9 +329,6 @@ async def complete_native(
         generations.append(attempt)
     if window is not None:
         window.attempts.append(attempt)
-    checkpoint = (
-        CheckpointAccess.from_environment(model) if purpose == "learner" else None
-    )
     headers = {
         "content-type": "application/json",
         "anthropic-version": "2023-06-01",

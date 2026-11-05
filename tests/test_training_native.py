@@ -163,7 +163,7 @@ async def test_native_episode_retains_exact_calls_and_freezes_elder(
             if request["system"] == JUDGE_SYSTEM:
                 assert slot is None
                 assert request["model"] == "anthropic/claude-opus-4.7"
-                assert request["temperature"] == 1 and request["top_p"] == 1
+                assert "temperature" not in request and "top_p" not in request
                 context = json.loads(request["messages"][0]["content"])
                 transcript = context["transcript"]
                 proposal = transcript["proposal"]
