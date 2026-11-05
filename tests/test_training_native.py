@@ -21,6 +21,7 @@ import websockets
 from gnomic.judge import ACTION_JUDGE_SYSTEM, JUDGE_SYSTEM
 from gnomic.llm_transport import Attempt, complete_native
 from gnomic.players.native import NativePolicy
+from gnomic.players.posttrain_prompt import REPLY_PROTOCOL
 from gnomic.players.scribe import ScribePolicy
 from gnomic.players.sdk import GameView, run_ws_player
 from gnomic.server.app import GameServer, build_app
@@ -384,6 +385,9 @@ async def test_native_episode_retains_exact_calls_and_freezes_elder(
         generated = [
             a for d in episode.decisions for a in d.attempts if a.origin == "model"
         ]
+        assert generated
+        assert all(a.request["system"].endswith(REPLY_PROTOCOL) for a in generated)
+        assert '"action": "your natural-language action"' in REPLY_PROTOCOL
         environmental = [
             Attempt.model_validate(a)
             for a in episode.episode.outcome["environment_generations"]

@@ -118,6 +118,14 @@ Production evaluation needs a configured native endpoint and published budgets.
 
 ## Private training episodes
 
+The shared native/checkpoint prompt includes the reply shapes for introduction,
+action, proposal, debate and vote requests. In particular, an action is a
+nonempty natural-language string, never an action object. The same contract is
+included for every prompt wording and in exported teacher contexts. Parsers and
+ordinary rules remain unchanged: a malformed literal reply is still rejected
+and cannot supply an original teacher target. Historical source-pinned prompts
+and corpora retain their original identities.
+
 Hosted learner inference uses `python -m gnomic.players.native`. It shares one
 player-visible prompt with the Scribe teacher and the authoritative engine parser.
 Register saved weights, tokenizer and chat-template identities through the trusted
