@@ -220,3 +220,20 @@ record on interruption and complete raw episodes on success. Labels require
 independent content-bound teacher review or authenticated platform native receipts
 through the reviewed Metta importer. No local synthetic fixture can establish
 production Elder parity, genuine checkpoint inference, or improved strategy.
+
+
+### Native Claude default sampling controls
+
+The native Messages transport omits `temperature=1` and `top_p=1` for Claude calls.
+Legacy `2023-06-01` requests use those same defaults when omitted; Claude4.7+ routes
+no longer advertise these sampling controls. Nondefault values remain explicit,
+as do all authenticated checkpoint decoder controls. The original transmitted
+request and response remain in private attempt evidence. For Opus4.7 native
+learners, select the already supported `COWORLD_LLM_TEMPERATURE=1`; this does not
+change the existing learner default or any game rules, Elder reasoning budget,
+observation, action or timeout.
+
+[Anthropic sampling migration](https://platform.claude.com/docs/en/api/migration-2026-10-21#sampling-parameters-are-removed)
+and [strict provider routing](https://openrouter.ai/docs/guides/routing/provider-selection#requiring-providers-to-support-all-parameters)
+explain the compatibility boundary. Local HTTP fixtures do not establish real
+provider throughput or teacher usefulness.
