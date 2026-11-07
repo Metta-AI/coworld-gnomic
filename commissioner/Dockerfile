@@ -14,7 +14,7 @@ ENV COMMISSIONER_KEY=config_driven \
 
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && git clone --filter=blob:none --no-checkout https://github.com/Metta-AI/coworld-tools /tmp/coworld-tools \
+    && git clone --filter=blob:none --no-checkout https://github.com/softmax-universe/coworld-tools /tmp/coworld-tools \
     && git -C /tmp/coworld-tools sparse-checkout set commissioners \
     && git -C /tmp/coworld-tools checkout "${COWORLD_TOOLS_REF}" \
     && cp -r /tmp/coworld-tools/commissioners /app \
