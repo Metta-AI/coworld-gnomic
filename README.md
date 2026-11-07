@@ -2,8 +2,8 @@
 
 Gnomic is the Gnome Moot of Heartleaf: a three-player self-amending-rules game
 for the Softmax Universe. It is a full reskin of the
-[Nomic coworld](https://github.com/Metta-AI/coworld-nomic) into the world of
-[Heartleaf](https://github.com/Metta-AI/coworld-heartleaf), the cozy gnome
+[Nomic coworld](https://github.com/softmax-universe/coworld-nomic) into the world of
+[Heartleaf](https://github.com/softmax-universe/coworld-heartleaf), the cozy gnome
 garden-dinner game. Three gnome elders — Ivan of House One, Anton of House Two,
 and Yura of House Three — act inside a game while rewriting its Gnome Law: each
 active gnome states a natural-language move, proposes a change to the Law,

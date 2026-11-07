@@ -1,5 +1,3 @@
-# CI for the Gnomic coworld repo (Metta-AI/coworld-gnomic).
-#
 # Two jobs: the Python test suite, and a build of both compose images so a
 # broken Dockerfile is caught before `coworld build` hits it in a release.
 name: CI

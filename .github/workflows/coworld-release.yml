@@ -80,7 +80,7 @@ jobs:
           set -euo pipefail
           echo "Authenticate to Softmax" > "$RR/current_step"
           if [ -z "${SOFTMAX_TOKEN}" ]; then
-            echo "::error::SOFTMAX_TOKEN secret is not set on this repo (dispatch propagate-secrets.yml in Metta-AI/coworld-builder)"
+            echo "::error::SOFTMAX_TOKEN secret is not set on this repo (dispatch propagate-secrets.yml in softmax-universe/coworld-builder)"
             exit 1
           fi
           uvx --from "$COWORLD_PKG" softmax set-token "$SOFTMAX_TOKEN"
